@@ -8,7 +8,7 @@ Aplicativo web em Python com Streamlit para comparar dois relatorios CSV de aten
 - Identifica automaticamente colunas provaveis de TMA, TME, status e campos textuais.
 - Permite ajuste manual das colunas quando a deteccao automatica nao for suficiente.
 - Filtra atendimentos de mudanca de endereco e mudanca de comodo como um unico grupo.
-- Classifica o recorte em `Com taxa`, `Sem taxa` e `Sem identificacao de taxa`.
+- Classifica o recorte em `Com taxa`, `Sem taxa` e `Sem identificacao clara de taxa`.
 - Exibe cards, tabelas comparativas, graficos e conclusao automatica antes de gerar o PDF.
 - Gera relatorio PDF local e disponibiliza download pelo Streamlit.
 
@@ -69,4 +69,3 @@ Para Streamlit Community Cloud:
 - Se o CSV nao tiver coluna de TME, selecione `Usar TME = 0`.
 - Se a coluna de TMA ou status nao for detectada automaticamente, ajuste manualmente no mapeamento.
 - Os PDFs gerados sao salvos na pasta `output/` e tambem ficam disponiveis para download na tela.
-

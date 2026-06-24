@@ -39,7 +39,7 @@ def _read_bytes(source: bytes | bytearray | object) -> bytes:
 def _cleanup_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df = df.dropna(axis=1, how="all")
-    df.columns = [str(col).strip() for col in df.columns]
+    df.columns = [str(col).replace("\ufeff", "").strip() for col in df.columns]
     unnamed = [col for col in df.columns if str(col).lower().startswith("unnamed:")]
     if unnamed:
         df = df.drop(columns=unnamed)
@@ -91,4 +91,3 @@ def read_csv_flexible(source: bytes | bytearray | object) -> CsvReadResult:
 
 def readable_column_options(columns: Iterable[str]) -> list[str]:
     return [str(col) for col in columns]
-

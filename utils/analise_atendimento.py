@@ -10,7 +10,8 @@ import pandas as pd
 from .tratamento_tempo import duration_to_seconds, format_seconds
 
 
-TAX_GROUPS = ("Com taxa", "Sem taxa", "Sem identificacao de taxa")
+UNKNOWN_FEE_GROUP = "Sem identificacao clara de taxa"
+TAX_GROUPS = ("Com taxa", "Sem taxa", UNKNOWN_FEE_GROUP)
 
 TEXT_FIELD_KEYWORDS = (
     "tag",
@@ -22,6 +23,19 @@ TEXT_FIELD_KEYWORDS = (
     "categoria",
 )
 
+NON_TEXT_COLUMN_KEYWORDS = (
+    "data",
+    "hora",
+    "tempo",
+    "duracao",
+    "tma",
+    "tme",
+    "tmic",
+    "tmia",
+    "qic",
+    "qia",
+)
+
 CHANGE_TERMS = (
     "mudanca de endereco",
     "mudanca endereco",
@@ -29,23 +43,22 @@ CHANGE_TERMS = (
     "mudanca comodo",
 )
 
-WITHOUT_FEE_TERMS = (
-    "sem taxa",
-    "isento",
-    "isenta",
-    "isencao",
-    "sem cobranca",
-    "sem cobrança",
-    "taxa isenta",
+WITHOUT_FEE_PATTERNS = (
+    r"\bsem\s+(?:taxa|cobranca|custo)\b",
+    r"\bs[/ ]?taxa\b",
+    r"\bisent[oa]\b",
+    r"\bisencao\b",
+    r"\btaxa\s+isenta\b",
+    r"\bnao\s+(?:tem|possui|cobra)\s+taxa\b",
+    r"\btaxa\s+(?:zero|0)\b",
 )
 
-WITH_FEE_TERMS = (
-    "com taxa",
-    "taxa de mudanca",
-    "taxa mudanca",
-    "cobranca de taxa",
-    "cobrança de taxa",
-    "taxa",
+WITH_FEE_PATTERNS = (
+    r"\bcom\s+(?:taxa|cobranca)\b",
+    r"\bc[/ ]?taxa\b",
+    r"\btaxa\s+(?:de\s+)?mudanca\b",
+    r"\bcobranca\s+de\s+taxa\b",
+    r"\btaxa\s+(?:aceita|aprovada|cobrada|aplicada)\b",
 )
 
 COLUMN_CANDIDATES = {
@@ -138,11 +151,13 @@ def detect_columns(df: pd.DataFrame) -> dict[str, Any]:
         semantic: find_best_column(columns, candidates)
         for semantic, candidates in COLUMN_CANDIDATES.items()
     }
-    text_columns = [
-        col
-        for col in columns
-        if any(keyword in normalize_column_name(col) for keyword in TEXT_FIELD_KEYWORDS)
-    ]
+    text_columns = []
+    for col in columns:
+        normalized = normalize_column_name(col)
+        is_text_candidate = any(keyword in normalized for keyword in TEXT_FIELD_KEYWORDS)
+        is_metric_or_date = any(keyword in normalized for keyword in NON_TEXT_COLUMN_KEYWORDS)
+        if is_text_candidate and not is_metric_or_date:
+            text_columns.append(col)
     detected["text_columns"] = text_columns
     return detected
 
@@ -163,11 +178,22 @@ def _row_text(row: pd.Series, columns: list[str]) -> str:
 
 def classify_fee(text: str) -> str:
     normalized = normalize_text(text)
-    if any(normalize_text(term) in normalized for term in WITHOUT_FEE_TERMS):
+    if any(re.search(pattern, normalized) for pattern in WITHOUT_FEE_PATTERNS):
         return "Sem taxa"
-    if any(normalize_text(term) in normalized for term in WITH_FEE_TERMS):
+    if any(re.search(pattern, normalized) for pattern in WITH_FEE_PATTERNS):
         return "Com taxa"
-    return "Sem identificacao de taxa"
+    if _has_generic_fee_context(normalized):
+        return "Com taxa"
+    return UNKNOWN_FEE_GROUP
+
+
+def _has_generic_fee_context(text: str) -> bool:
+    if "taxa" not in text:
+        return False
+    fee_index = text.find("taxa")
+    window = text[max(0, fee_index - 60) : fee_index + 60]
+    context_terms = ("mudanca", "endereco", "comodo", "cobranca", "autosservico", "reinstalacao")
+    return any(term in window for term in context_terms)
 
 
 def is_change_request(text: str) -> bool:
@@ -278,7 +304,7 @@ def analyze_month(
         total_change=total_change,
         total_with_fee=int((filtered["_grupo_taxa"] == "Com taxa").sum()) if total_change else 0,
         total_without_fee=int((filtered["_grupo_taxa"] == "Sem taxa").sum()) if total_change else 0,
-        total_unknown_fee=int((filtered["_grupo_taxa"] == "Sem identificacao de taxa").sum()) if total_change else 0,
+        total_unknown_fee=int((filtered["_grupo_taxa"] == UNKNOWN_FEE_GROUP).sum()) if total_change else 0,
         general_inactivity=general_inactivity,
         general_inactivity_pct=summary_row["% inatividade geral"],
         general_tma_seconds=summary_row["TMA geral"],
@@ -367,4 +393,3 @@ def automatic_conclusion(analyses: list[MonthAnalysis], group_df: pd.DataFrame) 
         messages.append("Os indicadores ficaram estaveis entre os meses analisados, sem variacao critica aparente.")
 
     return " ".join(messages)
-
