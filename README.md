@@ -1,6 +1,6 @@
 # Analise comparativa de atendimento
 
-Aplicativo web em Python com Streamlit para comparar dois relatorios CSV de atendimento, com foco no recorte **Mudanca de Endereco + Mudanca de Comodo**.
+Aplicativo web em Python com Streamlit para comparar relatorios CSV de atendimento e auditar atendimentos OS PRO por regras, com camada opcional de IA.
 
 ## O que o app faz
 
@@ -15,6 +15,12 @@ Aplicativo web em Python com Streamlit para comparar dois relatorios CSV de aten
 - Exibe diagnostico executivo, semaforos de saude, top gargalos e conclusao automatica.
 - Permite alterar o recorte: mudanca endereco/comodo, arquivo inteiro ou busca personalizada.
 - Possui modo independente `Cobranca com IA`, usando o CSV completo para analisar Velma, cobranca, recorrencia, status, tipo, classificacao e evolucao diaria.
+- Possui modo `ANALISE DE AUTO SERVICO` para analisar bases CSV/XLSX de autosservico de mudanca de endereco e mudanca de comodo, com OS, faturas, CSAT, canais e departamentos.
+- Possui modo `Auditoria OS PRO` para analisar PDF, TXT ou texto colado manualmente.
+- Permite cadastrar criterios OS PRO por 1 a 10 arquivos PDF/TXT ou por JSON, com prioridade para os arquivos de criterios quando enviados.
+- No JSON, aceita regras obrigatorias, frases proibidas, pesos e sugestoes.
+- Calcula nota final, status aprovado/atencao/reprovado, conformidades, nao conformidades, evidencias, trechos problematicos e sugestoes.
+- Permite informar uma chave API no campo lateral para ativar uma analise avancada por IA, sem tornar a IA obrigatoria.
 - Permite adicionar termos extras para identificar com taxa e sem taxa.
 - Permite baixar PDF, Excel da analise e CSV com a base filtrada.
 - Exibe cards, tabelas comparativas, graficos e conclusao automatica antes de gerar o PDF.
@@ -29,7 +35,9 @@ README.md
 utils/
   leitura_csv.py
   tratamento_tempo.py
+  analise_autosservico.py
   analise_atendimento.py
+  auditoria_os_pro.py
   graficos.py
   pdf_report.py
 ```
@@ -77,3 +85,9 @@ Para Streamlit Community Cloud:
 - Se o CSV nao tiver coluna de TME, selecione `Usar TME = 0`.
 - Se a coluna de TMA ou status nao for detectada automaticamente, ajuste manualmente no mapeamento.
 - Os PDFs gerados sao salvos na pasta `output/` e tambem ficam disponiveis para download na tela.
+- No modo `Auditoria OS PRO`, a IA so e chamada quando a opcao estiver marcada e uma chave API for informada.
+- Sem IA, a auditoria usa regras objetivas: presenca de termos, ausencia de frases de risco e pesos cadastrados.
+- O modelo padrao do modo IA e `auto`; o app tenta detectar modelos visiveis pela chave API. Se preferir, informe manualmente um modelo liberado no seu projeto.
+- Se houver PDF/TXT de criterios OS PRO no cadastro, eles serao usados primeiro, com limite de 10 arquivos. Se nao houver arquivo, o app usa os criterios em JSON.
+- PDFs de criterios precisam ter texto selecionavel ou OCR. PDFs escaneados como imagem podem nao ter criterios extraidos; nesse caso envie uma versao com OCR ou TXT.
+- Depois de carregar criterios por PDF/TXT ou JSON, o app mostra uma previa dos criterios usados para facilitar a conferencia antes de interpretar a nota.

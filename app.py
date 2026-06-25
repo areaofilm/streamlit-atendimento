@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -31,6 +32,14 @@ from utils.analise_atendimento import (
     format_metric_dataframe,
     textual_columns_warning,
 )
+from utils.analise_autosservico import (
+    analyze_auto_service,
+    format_auto_service_table,
+    format_money,
+    format_number,
+    format_percent,
+    read_auto_service_file,
+)
 from utils.analise_cobranca_ia import (
     analyze_charge_ai,
     detect_charge_ai_columns,
@@ -47,6 +56,16 @@ from utils.analise_cobranca_hsm_d44 import (
     detect_d44_columns,
     format_d44_metric_table,
     format_d44_summary,
+)
+from utils.auditoria_os_pro import (
+    DEFAULT_CRITERIA_JSON,
+    analyze_os_pro,
+    analyze_with_ai,
+    diagnose_openai_key,
+    parse_criteria_document,
+    parse_criteria_json,
+    read_uploaded_text,
+    result_to_tables,
 )
 from utils.graficos import create_figures
 from utils.graficos_cobranca_ia import create_charge_ai_figures
@@ -753,21 +772,412 @@ def _render_analysis(results: dict) -> None:
         )
 
 
-st.title("Analise comparativa de relatorios CSV de atendimento")
-st.caption("Mudanca de Endereco + Mudanca de Comodo | TMA, TME, status, classificacao e contagem de taxa")
+def _render_os_pro_list(title: str, items: list[dict], empty_message: str, field: str) -> None:
+    st.markdown(f"**{title}**")
+    if not items:
+        st.caption(empty_message)
+        return
+    for item in items:
+        st.markdown(f"- {item.get('criterio', 'Criterio')}")
+        detail = item.get(field)
+        if detail:
+            st.caption(detail)
+
+
+def _criteria_preview_dataframe(criteria: list[dict]) -> pd.DataFrame:
+    rows = []
+    for item in criteria:
+        rows.append(
+            {
+                "Criterio": item.get("nome", ""),
+                "Tipo": item.get("tipo", ""),
+                "Peso": item.get("peso", ""),
+                "Termos buscados": ", ".join(str(term) for term in item.get("termos", [])),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _render_os_pro_result(result: dict, ai_analysis: str | None = None) -> None:
+    score = result.get("nota", 0)
+    status = result.get("status", "Nao analisado")
+    metric_cols = st.columns(2)
+    metric_cols[0].metric("Nota final", f"{score}/100")
+    metric_cols[1].metric("Status", status)
+
+    st.progress(min(max(int(score), 0), 100) / 100)
+    _render_os_pro_list(
+        "Conforme",
+        result.get("conformidades", []),
+        "Nenhuma conformidade encontrada.",
+        "evidencia",
+    )
+    _render_os_pro_list(
+        "Nao conforme",
+        result.get("nao_conformidades", []),
+        "Nenhuma nao conformidade encontrada.",
+        "problema",
+    )
+
+    suggestions = [item for item in result.get("nao_conformidades", []) if item.get("sugestao")]
+    st.markdown("**Sugestao**")
+    if suggestions:
+        for item in suggestions:
+            st.info(item["sugestao"])
+    else:
+        st.caption("Nenhuma sugestao pendente pelos criterios cadastrados.")
+
+    tables = result_to_tables(result)
+    tab_evidence, tab_nonconformity, tab_export = st.tabs(["Evidencias", "Trechos problematicos", "Exportar"])
+    with tab_evidence:
+        if tables["evidencias"].empty:
+            st.caption("Nenhuma evidencia textual encontrada.")
+        else:
+            st.dataframe(tables["evidencias"], use_container_width=True, hide_index=True)
+    with tab_nonconformity:
+        if tables["nao_conformidades"].empty:
+            st.caption("Nenhum trecho problematico encontrado.")
+        else:
+            st.dataframe(tables["nao_conformidades"], use_container_width=True, hide_index=True)
+    with tab_export:
+        export_payload = {
+            "nota": result.get("nota"),
+            "status": result.get("status"),
+            "conformidades": result.get("conformidades", []),
+            "nao_conformidades": result.get("nao_conformidades", []),
+            "evidencias": result.get("evidencias", []),
+        }
+        st.download_button(
+            "Baixar resultado JSON",
+            data=json.dumps(export_payload, ensure_ascii=False, indent=2).encode("utf-8"),
+            file_name="auditoria_os_pro.json",
+            mime="application/json",
+        )
+
+    if ai_analysis:
+        st.subheader("Analise avancada por IA")
+        st.write(ai_analysis)
+
+
+def _render_os_pro_audit() -> None:
+    st.title("Auditoria OS PRO de Atendimento")
+    st.caption("Analise por regras com modo IA opcional para leitura de contexto, risco e melhoria da resposta.")
+
+    with st.sidebar:
+        st.header("Modo IA opcional")
+        enable_ai = st.checkbox("Ativar IA quando houver chave API", value=False)
+        api_key = st.text_input("Chave API", type="password", help="A chave fica apenas nesta sessao do Streamlit.")
+        model = st.text_input(
+            "Modelo",
+            value="auto",
+            help="Use auto para tentar detectar um modelo disponivel na sua chave, ou informe um modelo especifico.",
+        )
+        if st.button("Testar chave API", use_container_width=True):
+            diagnostic = diagnose_openai_key(api_key)
+            if diagnostic["ok"]:
+                st.success(diagnostic["message"])
+                suggested_models = diagnostic.get("models", [])
+                if suggested_models:
+                    st.caption(f"Sugestao para o campo Modelo: {suggested_models[0]}")
+            else:
+                st.error(diagnostic["message"])
+                all_models = diagnostic.get("all_models", [])
+                if all_models:
+                    st.caption(f"Modelos visiveis: {', '.join(all_models[:20])}")
+
+    left, right = st.columns([1, 1])
+    with left:
+        st.subheader("Entrada")
+        uploaded_file = st.file_uploader("Upload PDF/TXT", type=["pdf", "txt"], key="os_pro_upload")
+        pasted_text = st.text_area("Ou cole o atendimento aqui", height=260, key="os_pro_text")
+        side_text = st.text_area("Campo lateral / observacoes do atendimento", height=150, key="os_pro_side_text")
+
+        with st.expander("Cadastro de criterios OS PRO", expanded=False):
+            criteria_files = st.file_uploader(
+                "PDF/TXT de criterios OS PRO (prioritario)",
+                type=["pdf", "txt"],
+                key="os_pro_criteria_file",
+                accept_multiple_files=True,
+                help="Envie de 1 a 10 arquivos. Se enviado, este conjunto sera usado antes do JSON abaixo.",
+            )
+            criteria_json = st.text_area(
+                "Criterios em JSON",
+                value=st.session_state.get("os_pro_criteria_json", DEFAULT_CRITERIA_JSON),
+                height=360,
+                key="os_pro_criteria_json",
+            )
+            st.caption("Prioridade: PDFs/TXTs de criterios > JSON. Limite: minimo 1 e maximo 10 arquivos PRO.")
+
+        analyze_button = st.button("Analisar Atendimento", type="primary", use_container_width=True)
+
+    if analyze_button:
+        try:
+            uploaded_text = read_uploaded_text(uploaded_file)
+            full_text = "\n\n".join(part.strip() for part in [uploaded_text, pasted_text, side_text] if part and part.strip())
+            if not full_text:
+                st.warning("Envie um PDF/TXT ou cole o atendimento para analisar.")
+                st.stop()
+
+            if criteria_files:
+                if len(criteria_files) > 10:
+                    st.error("Envie no maximo 10 arquivos de criterios OS PRO.")
+                    st.stop()
+                criteria = []
+                criteria_sources = []
+                criteria_failures = []
+                for criteria_file in criteria_files:
+                    try:
+                        criteria_text = read_uploaded_text(criteria_file)
+                        file_criteria = parse_criteria_document(criteria_text)
+                        criteria.extend(file_criteria)
+                        criteria_sources.append(f"{criteria_file.name}: {len(file_criteria)}")
+                    except Exception as exc:  # noqa: BLE001 - keep processing other criteria files.
+                        criteria_failures.append(f"{criteria_file.name}: {exc}")
+                if criteria_failures:
+                    st.warning(
+                        "Alguns arquivos PRO nao tiveram criterios legiveis. "
+                        "Se forem PDFs escaneados/imagem, salve com OCR ou envie em TXT. "
+                        f"Arquivos: {'; '.join(criteria_failures)}"
+                    )
+                if not criteria:
+                    st.error(
+                        "Nenhum criterio foi extraido dos arquivos PRO enviados. "
+                        "O PDF precisa ter texto selecionavel/OCR, ou envie os criterios em TXT/JSON."
+                    )
+                    st.stop()
+                st.info(
+                    "Criterios carregados dos arquivos PRO: "
+                    f"{'; '.join(criteria_sources)}. Total: {len(criteria)} criterios."
+                )
+            else:
+                criteria = parse_criteria_json(criteria_json)
+            with st.expander("Previa dos criterios usados nesta analise", expanded=False):
+                st.dataframe(_criteria_preview_dataframe(criteria), use_container_width=True, hide_index=True)
+            result = analyze_os_pro(full_text, criteria)
+            ai_analysis = ""
+            if enable_ai and api_key.strip():
+                with st.spinner("Rodando analise avancada por IA..."):
+                    ai_analysis = analyze_with_ai(api_key, model, full_text, result)
+            elif enable_ai:
+                st.info("Modo IA marcado, mas nenhuma chave API foi informada. Rodei apenas a analise por regras.")
+
+            st.session_state["os_pro_result"] = result
+            st.session_state["os_pro_ai_analysis"] = ai_analysis
+        except Exception as exc:  # noqa: BLE001 - Streamlit should show a friendly diagnostic.
+            st.error(f"Nao foi possivel analisar o atendimento: {exc}")
+
+    with right:
+        st.subheader("Resultado da Auditoria")
+        if st.session_state.get("os_pro_result"):
+            _render_os_pro_result(
+                st.session_state["os_pro_result"],
+                st.session_state.get("os_pro_ai_analysis"),
+            )
+        else:
+            st.info("O resultado aparecera aqui depois de clicar em Analisar Atendimento.")
+
+
+def _auto_service_excel_bytes(results) -> bytes:
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        pd.DataFrame([results.summary]).to_excel(writer, sheet_name="Resumo", index=False)
+        results.service_df.to_excel(writer, sheet_name="Servico", index=False)
+        results.type_df.to_excel(writer, sheet_name="Tipo", index=False)
+        results.channel_df.to_excel(writer, sheet_name="Canal", index=False)
+        results.department_df.to_excel(writer, sheet_name="Departamento", index=False)
+        results.prepared_data.to_excel(writer, sheet_name="Base preparada", index=False)
+    return output.getvalue()
+
+
+def _auto_service_bar_chart(table: pd.DataFrame, label_col: str, value_col: str, title: str) -> None:
+    if table.empty or label_col not in table.columns or value_col not in table.columns:
+        st.info("Nao ha dados suficientes para montar este grafico.")
+        return
+    chart_df = table[[label_col, value_col]].copy().head(15)
+    chart_df[label_col] = chart_df[label_col].astype(str)
+    chart_df = chart_df.set_index(label_col)
+    st.caption(title)
+    st.bar_chart(chart_df)
+
+
+def _render_auto_service_table(title: str, table: pd.DataFrame) -> None:
+    st.caption(title)
+    if table.empty:
+        st.info("Nao ha dados suficientes para montar esta tabela.")
+        return
+    st.dataframe(format_auto_service_table(table), use_container_width=True, hide_index=True)
+
+
+def _render_auto_service_analysis() -> None:
+    st.title("ANALISE DE AUTO SERVIÇO")
+    st.caption("Mudanca de endereco + mudanca de comodo | OS, faturas, CSAT, canais e departamentos")
+
+    uploaded_file = st.file_uploader(
+        "CSV ou XLSX da analise de autosservico",
+        type=["csv", "xlsx", "xls"],
+        key="upload_autosservico",
+    )
+    analyze_clicked = st.button("Analisar", type="primary", use_container_width=True)
+
+    if analyze_clicked:
+        if uploaded_file is None:
+            st.warning("Envie um arquivo CSV ou XLSX para iniciar a analise.")
+            st.stop()
+        try:
+            with st.spinner("Lendo arquivo e montando a analise de autosservico..."):
+                df = read_auto_service_file(uploaded_file)
+                if df.empty:
+                    st.warning("O arquivo enviado esta vazio.")
+                    st.stop()
+                st.session_state["auto_service_results"] = analyze_auto_service(df)
+        except Exception as exc:  # noqa: BLE001 - keep the UI actionable.
+            st.error(f"Nao foi possivel analisar o arquivo: {exc}")
+            st.stop()
+
+    results = st.session_state.get("auto_service_results")
+    if not results:
+        st.info("Envie um CSV ou XLSX e clique em Analisar para gerar a leitura de autosservico.")
+        return
+
+    summary = results.summary
+    st.subheader("Resumo geral")
+    metrics = [
+        ("Registros", format_number(summary["Registros"])),
+        ("Atendimentos", format_number(summary["Atendimentos"])),
+        ("OS geradas", format_number(summary["OS geradas"])),
+        ("OS executadas", format_number(summary["OS executadas"])),
+        ("Taxa execucao OS", format_percent(summary["% OS executadas"])),
+        ("Faturas geradas", format_number(summary["Faturas geradas"])),
+        ("Faturas pagas", format_number(summary["Faturas pagas"])),
+        ("Taxa pagamento", format_percent(summary["% Faturas pagas"])),
+        ("Boletos isentos", format_number(summary["Boletos isentos"])),
+        ("Valor total", format_money(summary["Valor total"])),
+        ("CSAT positivo", format_percent(summary["% CSAT positivo"])),
+        ("CSAT negativo", format_percent(summary["% CSAT negativo"])),
+    ]
+    for start in range(0, len(metrics), 4):
+        cols = st.columns(4)
+        for col, (label, value) in zip(cols, metrics[start : start + 4]):
+            col.metric(label, value)
+
+    st.subheader("Diagnostico principal")
+    for item in results.diagnostic:
+        st.write(f"- {item}")
+
+    tab_summary, tab_ops, tab_channels, tab_issues, tab_downloads = st.tabs(
+        ["Servicos", "Operacao", "Canais", "Gargalos", "Downloads"]
+    )
+    with tab_summary:
+        st.subheader("Mudanca de endereco x mudanca de comodo")
+        _render_auto_service_table("Resumo por servico", results.service_df)
+        _auto_service_bar_chart(results.service_df, "__servico", "Atendimentos", "Volume por servico")
+        if not results.service_df.empty:
+            top_service = results.service_df.iloc[0]
+            worst_execution = results.service_df.sort_values("% OS executadas", ascending=True).iloc[0]
+            st.markdown("#### Leitura direta")
+            st.write(f"- O servico com maior volume e **{top_service['__servico']}**, com **{format_number(top_service['Atendimentos'])} atendimentos**.")
+            st.write(f"- O pior servico em execucao de OS e **{worst_execution['__servico']}**, com **{format_percent(worst_execution['% OS executadas'])}**.")
+
+    with tab_ops:
+        st.subheader("Autosservico x atendimento humano")
+        _render_auto_service_table("Resumo por tipo de atendimento", results.type_df)
+        _auto_service_bar_chart(results.type_df, "__tipo", "Atendimentos", "Volume por tipo de atendimento")
+        if not results.type_df.empty and len(results.type_df) > 1:
+            best_execution = results.type_df.sort_values("% OS executadas", ascending=False).iloc[0]
+            worst_payment = results.type_df.sort_values("% Faturas pagas", ascending=True).iloc[0]
+            st.write(f"- Melhor execucao de OS: **{best_execution['__tipo']}** com **{format_percent(best_execution['% OS executadas'])}**.")
+            st.write(f"- Pior pagamento de faturas: **{worst_payment['__tipo']}** com **{format_percent(worst_payment['% Faturas pagas'])}**.")
+
+    with tab_channels:
+        st.subheader("App Minha Valenet x WhatsApp")
+        _render_auto_service_table("Resumo por canal/integracao", results.channel_df)
+        _auto_service_bar_chart(results.channel_df, "__canal", "Atendimentos", "Volume por canal")
+        channels_without_csat = results.channel_df[(results.channel_df["Atendimentos"] > 0) & (results.channel_df["Avaliacoes_CSAT"] == 0)]
+        for _, row in channels_without_csat.iterrows():
+            st.error(
+                f"O canal **{row['__canal']}** possui **{format_number(row['Atendimentos'])} atendimentos** "
+                "e zero avaliacao CSAT. Isso e ponto cego de satisfacao."
+            )
+
+        st.subheader("Analise por departamento/equipe")
+        _render_auto_service_table("Resumo por departamento/equipe", results.department_df)
+        _auto_service_bar_chart(results.department_df, "__departamento", "Atendimentos", "Volume por departamento/equipe")
+        if not results.department_df.empty:
+            top_department = results.department_df.iloc[0]
+            worst_department_execution = results.department_df.sort_values("% OS executadas", ascending=True).iloc[0]
+            worst_department_payment = results.department_df.sort_values("% Faturas pagas", ascending=True).iloc[0]
+            st.write(f"- Maior volume: **{top_department['__departamento']}**, com **{format_number(top_department['Atendimentos'])} atendimentos**.")
+            st.write(f"- Pior execucao de OS: **{worst_department_execution['__departamento']}**, com **{format_percent(worst_department_execution['% OS executadas'])}**.")
+            st.write(f"- Pior pagamento: **{worst_department_payment['__departamento']}**, com **{format_percent(worst_department_payment['% Faturas pagas'])}**.")
+
+    with tab_issues:
+        st.subheader("Principais gargalos")
+        for item in results.bottlenecks:
+            st.write(f"- {item}")
+
+        st.subheader("Pontos estranhos da base")
+        for item in results.odd_points:
+            st.write(f"- {item}")
+
+        with st.expander("Ver linhas com OS maior que atendimentos"):
+            st.dataframe(results.odd_os_rows, use_container_width=True, hide_index=True)
+        with st.expander("Ver linhas com fatura gerada e sem pagamento"):
+            st.dataframe(results.odd_invoice_rows, use_container_width=True, hide_index=True)
+
+        st.subheader("Conclusao")
+        if summary["% OS executadas"] < 60 or summary["% Faturas pagas"] < 30:
+            st.warning(results.conclusion)
+        else:
+            st.success(results.conclusion)
+
+        st.subheader("Acoes recomendadas")
+        for item in results.recommendations:
+            st.write(f"- {item}")
+
+    with tab_downloads:
+        st.download_button(
+            "Baixar Excel da analise",
+            data=_auto_service_excel_bytes(results),
+            file_name="analise_auto_servico.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        with st.expander("Colunas identificadas automaticamente"):
+            st.json(results.detected_columns)
+        with st.expander("Base carregada"):
+            st.dataframe(results.original_data, use_container_width=True, hide_index=True)
+
 
 st.sidebar.header("Regras da analise")
 filter_label = st.sidebar.radio(
     "Recorte analisado",
-    ["Mudanca de Endereco + Mudanca de Comodo", "Arquivo inteiro", "Busca personalizada", "Cobranca com IA", "Cobranca HSM D44"],
+    [
+        "Auditoria OS PRO",
+        "ANALISE DE AUTO SERVIÇO",
+        "Arquivo inteiro",
+        "Busca personalizada",
+        "Cobranca com IA",
+        "Cobranca HSM D44",
+    ],
 )
 filter_mode = {
-    "Mudanca de Endereco + Mudanca de Comodo": FILTER_CHANGE,
+    "Auditoria OS PRO": "os_pro",
+    "ANALISE DE AUTO SERVIÇO": "autoservice",
     "Arquivo inteiro": FILTER_ALL,
     "Busca personalizada": FILTER_CUSTOM,
     "Cobranca com IA": "charge_ai",
     "Cobranca HSM D44": "d44",
 }[filter_label]
+
+if filter_mode == "os_pro":
+    _render_os_pro_audit()
+    st.stop()
+if filter_mode == "autoservice":
+    _render_auto_service_analysis()
+    st.stop()
+
+st.title("Analise comparativa de relatorios CSV de atendimento")
+st.caption("Mudanca de Endereco + Mudanca de Comodo | TMA, TME, status, classificacao e contagem de taxa")
+
 custom_filter_text = st.sidebar.text_area(
     "Termos da busca personalizada",
     value="",
