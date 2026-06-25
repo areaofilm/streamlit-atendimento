@@ -14,6 +14,9 @@ from reportlab.lib.units import cm
 from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 
+LOGO_PATH = Path(__file__).resolve().parents[1] / "assets" / "valenet_logo.png"
+
+
 def _table(df: pd.DataFrame, font_size: int = 7) -> Table:
     if df.empty and len(df.columns) == 0:
         df = pd.DataFrame([{"Aviso": "Sem dados disponiveis para esta secao."}])
@@ -48,7 +51,8 @@ def _footer(canvas, _doc) -> None:
     canvas.setFont("Helvetica", 8)
     canvas.setFillColor(colors.HexColor("#667085"))
     canvas.drawString(1.2 * cm, 0.8 * cm, f"Gerado em {datetime.now():%d/%m/%Y %H:%M}")
-    canvas.drawRightString(28.5 * cm, 0.8 * cm, f"Pagina {canvas.getPageNumber()}")
+    if LOGO_PATH.exists():
+        canvas.drawImage(str(LOGO_PATH), 25.2 * cm, 0.45 * cm, width=3.3 * cm, height=1.0 * cm, preserveAspectRatio=True, mask="auto")
     canvas.restoreState()
 
 
