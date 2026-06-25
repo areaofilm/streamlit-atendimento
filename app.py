@@ -667,6 +667,7 @@ if analyze_clicked:
                 "conclusion": analysis.conclusion,
             }
             st.session_state.pop("analysis_results", None)
+            _render_charge_ai_analysis(st.session_state["charge_ai_results"])
             st.stop()
 
         if not upload_1 or not upload_2:
