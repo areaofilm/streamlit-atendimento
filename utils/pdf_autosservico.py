@@ -51,7 +51,7 @@ def _compact_metric_table(df: pd.DataFrame, label_col: str) -> pd.DataFrame:
         "OS_executadas",
         "% OS executadas",
         "Faturas_pagas",
-        "Valor_faturas_pagas",
+        "Valor_pago_estimado",
         "% Faturas pagas",
         "Avaliacoes_CSAT",
         "% CSAT positivo",
@@ -66,7 +66,7 @@ def _compact_metric_table(df: pd.DataFrame, label_col: str) -> pd.DataFrame:
             "OS_executadas": "OS exec.",
             "% OS executadas": "% OS exec.",
             "Faturas_pagas": "Fat. pagas",
-            "Valor_faturas_pagas": "Valor pago",
+            "Valor_pago_estimado": "Valor pago est.",
             "% Faturas pagas": "% Fat. pagas",
             "Avaliacoes_CSAT": "Aval. CSAT",
             "% CSAT positivo": "% CSAT +",
@@ -163,6 +163,13 @@ def generate_auto_service_pdf(
             Paragraph("Diagnostico principal", styles["Heading2"]),
             *_paragraph_list(diagnostic, body),
             PageBreak(),
+            Paragraph(
+                "Nota sobre valor pago estimado: calculado por linha como "
+                "(Valor total das faturas / Faturas geradas) x Faturas pagas, "
+                "pois a base nao possui o valor individual de cada fatura paga.",
+                body,
+            ),
+            Spacer(1, 0.35 * cm),
             Paragraph("Mudanca de endereco x mudanca de comodo", styles["Heading2"]),
             _table(_compact_metric_table(service_df, "Servico"), font_size=7.0, max_rows=25, col_widths=[4.9 * cm, 1.8 * cm, 1.5 * cm, 1.8 * cm, 1.8 * cm, 1.8 * cm, 2.5 * cm, 2.0 * cm, 1.7 * cm, 1.7 * cm]),
             Spacer(1, 0.5 * cm),

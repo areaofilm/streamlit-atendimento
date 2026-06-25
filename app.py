@@ -1003,7 +1003,7 @@ def _auto_service_summary_pdf_df(summary: dict) -> pd.DataFrame:
             {"Indicador": "Taxa de faturas pagas", "Resultado": format_percent(summary["% Faturas pagas"])},
             {"Indicador": "Boletos isentos", "Resultado": format_number(summary["Boletos isentos"])},
             {"Indicador": "Valor total das faturas", "Resultado": format_money(summary["Valor total"])},
-            {"Indicador": "Valor estimado das faturas pagas", "Resultado": format_money(summary["Valor faturas pagas"])},
+            {"Indicador": "Valor pago estimado", "Resultado": format_money(summary["Valor pago estimado"])},
             {"Indicador": "Avaliacoes CSAT", "Resultado": format_number(summary["Avaliacoes CSAT"])},
             {"Indicador": "CSAT 4 ou 5", "Resultado": format_percent(summary["% CSAT positivo"])},
             {"Indicador": "CSAT menor ou igual a 3", "Resultado": format_percent(summary["% CSAT negativo"])},
@@ -1076,7 +1076,7 @@ def _render_auto_service_analysis() -> None:
         ("Taxa pagamento", format_percent(summary["% Faturas pagas"])),
         ("Boletos isentos", format_number(summary["Boletos isentos"])),
         ("Valor total", format_money(summary["Valor total"])),
-        ("Valor pago", format_money(summary["Valor faturas pagas"])),
+        ("Valor pago estimado", format_money(summary["Valor pago estimado"])),
         ("CSAT positivo", format_percent(summary["% CSAT positivo"])),
         ("CSAT negativo", format_percent(summary["% CSAT negativo"])),
     ]
@@ -1084,6 +1084,10 @@ def _render_auto_service_analysis() -> None:
         cols = st.columns(4)
         for col, (label, value) in zip(cols, metrics[start : start + 4]):
             col.metric(label, value)
+    st.caption(
+        "Valor pago estimado = ticket medio da linha (Valor total das faturas / Faturas geradas) "
+        "x Faturas pagas. A base nao possui o valor individual de cada fatura paga."
+    )
 
     st.subheader("Diagnostico principal")
     for item in results.diagnostic:
@@ -1166,41 +1170,43 @@ def _render_auto_service_analysis() -> None:
             file_name="analise_auto_servico.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
-        if st.button("Gerar PDF completo", type="primary", key="auto_service_pdf"):
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_path = REPORT_DIR / f"relatorio_auto_servico_{timestamp}.pdf"
-            try:
-                with st.spinner("Gerando PDF completo com logo Valenet..."):
-                    pdf_bytes = generate_auto_service_pdf(
-                        output_path=output_path,
-                        summary_df=_auto_service_summary_pdf_df(summary),
-                        service_df=format_auto_service_table(results.service_df),
-                        type_df=format_auto_service_table(results.type_df),
-                        channel_df=format_auto_service_table(results.channel_df),
-                        department_df=format_auto_service_table(results.department_df),
-                        diagnostic=results.diagnostic,
-                        bottlenecks=results.bottlenecks,
-                        odd_points=results.odd_points,
-                        conclusion=results.conclusion,
-                        recommendations=results.recommendations,
-                    )
-                st.session_state["auto_service_pdf_bytes"] = pdf_bytes
-                st.session_state["auto_service_pdf_name"] = output_path.name
-                st.success(f"PDF gerado e salvo localmente em: {output_path}")
-            except Exception as exc:  # noqa: BLE001 - keep UI friendly.
-                st.error(f"Nao foi possivel gerar o PDF: {exc}")
-        if st.session_state.get("auto_service_pdf_bytes"):
-            st.download_button(
-                "Baixar PDF",
-                data=st.session_state["auto_service_pdf_bytes"],
-                file_name=st.session_state.get("auto_service_pdf_name", "relatorio_auto_servico.pdf"),
-                mime="application/pdf",
-                key="auto_service_pdf_download",
-            )
         with st.expander("Colunas identificadas automaticamente"):
             st.json(results.detected_columns)
         with st.expander("Base carregada"):
             st.dataframe(results.original_data, use_container_width=True, hide_index=True)
+
+    st.subheader("Relatorio em PDF")
+    if st.button("Gerar PDF completo", type="primary", key="auto_service_pdf"):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = REPORT_DIR / f"relatorio_auto_servico_{timestamp}.pdf"
+        try:
+            with st.spinner("Gerando PDF completo com logo Valenet..."):
+                pdf_bytes = generate_auto_service_pdf(
+                    output_path=output_path,
+                    summary_df=_auto_service_summary_pdf_df(summary),
+                    service_df=format_auto_service_table(results.service_df),
+                    type_df=format_auto_service_table(results.type_df),
+                    channel_df=format_auto_service_table(results.channel_df),
+                    department_df=format_auto_service_table(results.department_df),
+                    diagnostic=results.diagnostic,
+                    bottlenecks=results.bottlenecks,
+                    odd_points=results.odd_points,
+                    conclusion=results.conclusion,
+                    recommendations=results.recommendations,
+                )
+            st.session_state["auto_service_pdf_bytes"] = pdf_bytes
+            st.session_state["auto_service_pdf_name"] = output_path.name
+            st.success(f"PDF gerado e salvo localmente em: {output_path}")
+        except Exception as exc:  # noqa: BLE001 - keep UI friendly.
+            st.error(f"Nao foi possivel gerar o PDF: {exc}")
+    if st.session_state.get("auto_service_pdf_bytes"):
+        st.download_button(
+            "Baixar PDF",
+            data=st.session_state["auto_service_pdf_bytes"],
+            file_name=st.session_state.get("auto_service_pdf_name", "relatorio_auto_servico.pdf"),
+            mime="application/pdf",
+            key="auto_service_pdf_download",
+        )
 
 
 st.sidebar.header("Regras da analise")
