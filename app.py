@@ -1003,6 +1003,7 @@ def _auto_service_summary_pdf_df(summary: dict) -> pd.DataFrame:
             {"Indicador": "Taxa de faturas pagas", "Resultado": format_percent(summary["% Faturas pagas"])},
             {"Indicador": "Boletos isentos", "Resultado": format_number(summary["Boletos isentos"])},
             {"Indicador": "Valor total das faturas", "Resultado": format_money(summary["Valor total"])},
+            {"Indicador": "Valor estimado das faturas pagas", "Resultado": format_money(summary["Valor faturas pagas"])},
             {"Indicador": "Avaliacoes CSAT", "Resultado": format_number(summary["Avaliacoes CSAT"])},
             {"Indicador": "CSAT 4 ou 5", "Resultado": format_percent(summary["% CSAT positivo"])},
             {"Indicador": "CSAT menor ou igual a 3", "Resultado": format_percent(summary["% CSAT negativo"])},
@@ -1075,6 +1076,7 @@ def _render_auto_service_analysis() -> None:
         ("Taxa pagamento", format_percent(summary["% Faturas pagas"])),
         ("Boletos isentos", format_number(summary["Boletos isentos"])),
         ("Valor total", format_money(summary["Valor total"])),
+        ("Valor pago", format_money(summary["Valor faturas pagas"])),
         ("CSAT positivo", format_percent(summary["% CSAT positivo"])),
         ("CSAT negativo", format_percent(summary["% CSAT negativo"])),
     ]

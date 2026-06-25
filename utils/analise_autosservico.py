@@ -233,6 +233,9 @@ def prepare_auto_service_base(df: pd.DataFrame, columns: dict[str, str | None]) 
     if not columns.get("csat_neg") and columns.get("csat_neg_percent"):
         base["__csat_neg"] = base["__csat_total"] * (base["__csat_neg_percent"] / 100)
 
+    average_invoice_value = base["__valor_total"].where(base["__faturas_geradas"] > 0, 0) / base["__faturas_geradas"].where(base["__faturas_geradas"] > 0, 1)
+    base["__valor_faturas_pagas"] = average_invoice_value * base["__faturas_pagas"]
+
     return base
 
 
@@ -245,6 +248,7 @@ def calculate_summary(base: pd.DataFrame) -> dict[str, Any]:
     invoices_paid = float(base["__faturas_pagas"].sum())
     exempt_bills = float(base["__boletos_isentos"].sum())
     total_value = float(base["__valor_total"].sum())
+    paid_value = float(base["__valor_faturas_pagas"].sum()) if "__valor_faturas_pagas" in base.columns else 0.0
     csat_total = float(base["__csat_total"].sum())
     csat_pos = float(base["__csat_pos"].sum())
     csat_neg = float(base["__csat_neg"].sum())
@@ -263,6 +267,7 @@ def calculate_summary(base: pd.DataFrame) -> dict[str, Any]:
         "% Faturas pagas": percent(invoices_paid, invoices_created),
         "Boletos isentos": exempt_bills,
         "Valor total": total_value,
+        "Valor faturas pagas": paid_value,
         "Avaliacoes CSAT": csat_total,
         "CSAT positivo": csat_pos,
         "CSAT negativo": csat_neg,
@@ -280,6 +285,7 @@ def summary_by_group(base: pd.DataFrame, group: str) -> pd.DataFrame:
             OS_executadas=("__os_executadas", "sum"),
             Faturas_geradas=("__faturas_geradas", "sum"),
             Faturas_pagas=("__faturas_pagas", "sum"),
+            Valor_faturas_pagas=("__valor_faturas_pagas", "sum"),
             Boletos_isentos=("__boletos_isentos", "sum"),
             Valor_total=("__valor_total", "sum"),
             Avaliacoes_CSAT=("__csat_total", "sum"),
@@ -322,8 +328,9 @@ def format_auto_service_table(table: pd.DataFrame) -> pd.DataFrame:
     ]:
         if column in formatted.columns:
             formatted[column] = formatted[column].apply(format_number)
-    if "Valor_total" in formatted.columns:
-        formatted["Valor_total"] = formatted["Valor_total"].apply(format_money)
+    for column in ("Valor_faturas_pagas", "Valor_total"):
+        if column in formatted.columns:
+            formatted[column] = formatted[column].apply(format_money)
     return formatted
 
 
