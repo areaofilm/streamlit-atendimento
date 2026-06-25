@@ -30,99 +30,145 @@ def _bar(
     return fig
 
 
-def create_figures(summary_df: pd.DataFrame, group_df: pd.DataFrame) -> list[tuple[str, go.Figure]]:
+def create_figures(
+    comparison_df: pd.DataFrame,
+    status_df: pd.DataFrame,
+    type_df: pd.DataFrame,
+    classification_df: pd.DataFrame,
+    fee_df: pd.DataFrame,
+) -> list[tuple[str, go.Figure]]:
     figures: list[tuple[str, go.Figure]] = []
-    group_plot = group_df.copy()
-    summary_plot = summary_df.copy()
+    comparison_plot = comparison_df.copy()
 
-    for column in ("TMA", "TME"):
-        group_plot[f"{column} (min)"] = group_plot[column] / 60
-        group_plot[f"{column} texto"] = group_plot[column].apply(format_seconds)
+    for column in ("TMA geral", "TME geral", "TMA sem inatividade"):
+        comparison_plot[f"{column} (min)"] = comparison_plot[column] / 60
+        comparison_plot[f"{column} texto"] = comparison_plot[column].apply(format_seconds)
 
     figures.append(
         (
-            "TMA por mes e grupo de taxa",
+            "TMA geral por mes",
             _bar(
-                group_plot,
+                comparison_plot,
                 "Mes",
-                "TMA (min)",
-                "Grupo",
-                "TMA por mes e grupo de taxa",
-                {"Mes": "Mes", "TMA (min)": "TMA medio (minutos)", "Grupo": "Grupo"},
-                "TMA texto",
-            ),
-        )
-    )
-    figures.append(
-        (
-            "TME por mes e grupo de taxa",
-            _bar(
-                group_plot,
-                "Mes",
-                "TME (min)",
-                "Grupo",
-                "TME por mes e grupo de taxa",
-                {"Mes": "Mes", "TME (min)": "TME medio (minutos)", "Grupo": "Grupo"},
-                "TME texto",
-            ),
-        )
-    )
-    figures.append(
-        (
-            "Volume por mes e grupo de taxa",
-            _bar(
-                group_plot,
-                "Mes",
-                "Volume",
-                "Grupo",
-                "Volume por mes e grupo de taxa",
-                {"Mes": "Mes", "Volume": "Volume", "Grupo": "Grupo"},
-                "Volume",
-            ),
-        )
-    )
-    figures.append(
-        (
-            "Inatividade por mes e grupo de taxa",
-            _bar(
-                group_plot,
-                "Mes",
-                "Inatividade",
-                "Grupo",
-                "Inatividade por mes e grupo de taxa",
-                {"Mes": "Mes", "Inatividade": "Quantidade de inatividade", "Grupo": "Grupo"},
-                "Inatividade",
-            ),
-        )
-    )
-    figures.append(
-        (
-            "Percentual de inatividade geral do mes",
-            _bar(
-                summary_plot,
-                "Mes",
-                "% inatividade geral",
+                "TMA geral (min)",
                 None,
-                "Percentual de inatividade geral do mes",
-                {"Mes": "Mes", "% inatividade geral": "% inatividade geral"},
-                "% inatividade geral",
+                "TMA geral por mes",
+                {"Mes": "Mes", "TMA geral (min)": "TMA medio (minutos)"},
+                "TMA geral texto",
             ),
         )
     )
     figures.append(
         (
-            "Total do recorte mudanca endereco + comodo por mes",
+            "TME geral por mes",
             _bar(
-                summary_plot,
+                comparison_plot,
                 "Mes",
-                "Total mudanca endereco + comodo",
+                "TME geral (min)",
                 None,
-                "Total do recorte mudanca endereco + comodo por mes",
-                {"Mes": "Mes", "Total mudanca endereco + comodo": "Total do recorte"},
-                "Total mudanca endereco + comodo",
+                "TME geral por mes",
+                {"Mes": "Mes", "TME geral (min)": "TME medio (minutos)"},
+                "TME geral texto",
             ),
         )
     )
+    figures.append(
+        (
+            "TMA sem inatividade por mes",
+            _bar(
+                comparison_plot,
+                "Mes",
+                "TMA sem inatividade (min)",
+                None,
+                "TMA sem inatividade por mes",
+                {"Mes": "Mes", "TMA sem inatividade (min)": "TMA medio sem inatividade (minutos)"},
+                "TMA sem inatividade texto",
+            ),
+        )
+    )
+
+    status_plot = status_df.copy()
+    if not status_plot.empty:
+        figures.append(
+            (
+                "Status dos atendimentos",
+                _bar(
+                    status_plot,
+                    "Status",
+                    "Volume",
+                    "Mes",
+                    "Status dos atendimentos",
+                    {"Status": "Status", "Volume": "Volume", "Mes": "Mes"},
+                    "Volume",
+                ),
+            )
+        )
+
+    type_plot = type_df.copy()
+    if not type_plot.empty:
+        figures.append(
+            (
+                "Tipo de atendimento",
+                _bar(
+                    type_plot,
+                    "Tipo",
+                    "Volume",
+                    "Mes",
+                    "Tipo de atendimento",
+                    {"Tipo": "Tipo", "Volume": "Volume", "Mes": "Mes"},
+                    "Volume",
+                ),
+            )
+        )
+
+    class_plot = classification_df.copy()
+    if not class_plot.empty:
+        class_plot["Media (min)"] = class_plot["Media"] / 60
+        class_plot["Media texto"] = class_plot["Media"].apply(format_seconds)
+        figures.append(
+            (
+                "TMA por classificacao",
+                _bar(
+                    class_plot,
+                    "Classificacao",
+                    "Media (min)",
+                    "Mes",
+                    "TMA por classificacao",
+                    {"Classificacao": "Classificacao", "Media (min)": "TMA medio (minutos)", "Mes": "Mes"},
+                    "Media texto",
+                ),
+            )
+        )
+        figures.append(
+            (
+                "Inatividade por classificacao",
+                _bar(
+                    class_plot,
+                    "Classificacao",
+                    "Inatividade",
+                    "Mes",
+                    "Inatividade por classificacao",
+                    {"Classificacao": "Classificacao", "Inatividade": "Inatividade", "Mes": "Mes"},
+                    "Inatividade",
+                ),
+            )
+        )
+
+    fee_plot = fee_df.copy()
+    if not fee_plot.empty:
+        figures.append(
+            (
+                "Volume por identificacao de taxa",
+                _bar(
+                    fee_plot,
+                    "Grupo",
+                    "Volume",
+                    "Mes",
+                    "Volume por identificacao de taxa",
+                    {"Grupo": "Grupo", "Volume": "Volume", "Mes": "Mes"},
+                    "Volume",
+                ),
+            )
+        )
 
     return figures
-

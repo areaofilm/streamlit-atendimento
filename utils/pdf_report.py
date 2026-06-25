@@ -58,8 +58,11 @@ def _figure_image(figure: Figure) -> Image | Paragraph:
 def generate_pdf(
     output_path: str | Path,
     months: tuple[str, str],
-    summary_df: pd.DataFrame,
-    group_df: pd.DataFrame,
+    comparison_df: pd.DataFrame,
+    status_df: pd.DataFrame,
+    type_df: pd.DataFrame,
+    classification_df: pd.DataFrame,
+    fee_df: pd.DataFrame,
     figures: list[tuple[str, Figure]],
     conclusion: str,
 ) -> bytes:
@@ -101,11 +104,20 @@ def generate_pdf(
         Spacer(1, 0.2 * cm),
         Paragraph(f"Periodo: {months[0]} x {months[1]}", subtitle),
         PageBreak(),
-        Paragraph("Resumo geral dos meses", styles["Heading2"]),
-        _dataframe_table(summary_df, font_size=8),
+        Paragraph("Comparacao principal", styles["Heading2"]),
+        _dataframe_table(comparison_df, font_size=6),
         Spacer(1, 0.5 * cm),
-        Paragraph("Recorte com taxa / sem taxa / sem identificacao", styles["Heading2"]),
-        _dataframe_table(group_df, font_size=6),
+        Paragraph("Status dos atendimentos", styles["Heading2"]),
+        _dataframe_table(status_df, font_size=7),
+        Spacer(1, 0.5 * cm),
+        Paragraph("Tipo de atendimento", styles["Heading2"]),
+        _dataframe_table(type_df, font_size=7),
+        PageBreak(),
+        Paragraph("Gargalo por classificacao", styles["Heading2"]),
+        _dataframe_table(classification_df, font_size=6),
+        Spacer(1, 0.5 * cm),
+        Paragraph("Contagem de taxa", styles["Heading2"]),
+        _dataframe_table(fee_df, font_size=7),
         PageBreak(),
     ]
 
@@ -129,4 +141,3 @@ def generate_pdf(
     pdf_bytes = buffer.getvalue()
     output_path.write_bytes(pdf_bytes)
     return pdf_bytes
-

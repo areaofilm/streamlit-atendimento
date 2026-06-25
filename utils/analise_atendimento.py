@@ -81,13 +81,24 @@ COLUMN_CANDIDATES = {
         "fila espera",
         "tme",
     ),
-    "date": ("data criacao", "data de criacao", "data abertura", "abertura", "criado em"),
+    "date": (
+        "data de entrada",
+        "data entrada",
+        "data criacao",
+        "data de criacao",
+        "data abertura",
+        "abertura",
+        "criado em",
+    ),
+    "type": ("tipo", "tipo atendimento", "modalidade", "canal atendimento"),
+    "classification": ("classificacao", "classificacao atendimento", "categoria", "motivo"),
 }
 
 
 @dataclass(frozen=True)
 class MonthAnalysis:
     month: str
+    period: str
     total_file: int
     total_change: int
     total_with_fee: int
@@ -97,10 +108,15 @@ class MonthAnalysis:
     general_inactivity_pct: float
     general_tma_seconds: float
     general_tme_seconds: float
-    change_tma_seconds: float
-    change_tme_seconds: float
-    summary_row: dict[str, Any]
-    group_rows: list[dict[str, Any]]
+    median_tma_seconds: float
+    tma_without_inactivity_seconds: float
+    median_without_inactivity_seconds: float
+    max_tma_seconds: float
+    comparison_row: dict[str, Any]
+    fee_rows: list[dict[str, Any]]
+    status_rows: list[dict[str, Any]]
+    type_rows: list[dict[str, Any]]
+    classification_rows: list[dict[str, Any]]
     filtered_data: pd.DataFrame
 
 
@@ -223,6 +239,69 @@ def _pct(numerator: int | float, denominator: int | float) -> float:
     return round((float(numerator) / float(denominator) * 100), 2) if denominator else 0.0
 
 
+def _display_value(value: Any, fallback: str) -> str:
+    if value is None or pd.isna(value):
+        return fallback
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none", "null", "-"}:
+        return fallback
+    return text
+
+
+def _period_from_dates(series: pd.Series | None) -> str:
+    if series is None or series.empty:
+        return "Nao identificado"
+    dates = pd.to_datetime(series, errors="coerce", dayfirst=True)
+    dates = dates.dropna()
+    if dates.empty:
+        return "Nao identificado"
+    start = dates.min()
+    end = dates.max()
+    if start.month == end.month and start.year == end.year:
+        return f"{start:%d/%m} a {end:%d/%m}"
+    return f"{start:%d/%m/%Y} a {end:%d/%m/%Y}"
+
+
+def _metric_rows(
+    df: pd.DataFrame,
+    month: str,
+    group_col: str,
+    label_col: str,
+    total: int,
+    top_n: int | None = None,
+) -> list[dict[str, Any]]:
+    if df.empty:
+        return []
+    rows: list[dict[str, Any]] = []
+    grouped = df.groupby(group_col, dropna=False)
+    for label, subset in grouped:
+        volume = len(subset)
+        inactivity = int(subset["_inatividade"].sum())
+        rows.append(
+            {
+                "Mes": month,
+                label_col: _display_value(label, "Nao identificado"),
+                "Volume": volume,
+                "% Volume": _pct(volume, total),
+                "Media": _mean(subset["_tma_seconds"]),
+                "Mediana": _median(subset["_tma_seconds"]),
+                "Inatividade": inactivity,
+                "% Inatividade": _pct(inactivity, volume),
+            }
+        )
+    rows.sort(key=lambda item: (item["Inatividade"], item["Media"], item["Volume"]), reverse=True)
+    return rows[:top_n] if top_n else rows
+
+
+def _fee_rows(df: pd.DataFrame, month: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    total = len(df)
+    for group in TAX_GROUPS:
+        volume = int((df["_grupo_taxa"] == group).sum()) if total else 0
+        rows.append({"Mes": month, "Grupo": group, "Volume": volume, "%": _pct(volume, total)})
+    return rows
+
+
 def analyze_month(
     df: pd.DataFrame,
     month: str,
@@ -230,6 +309,9 @@ def analyze_month(
     wait_time_col: str | None,
     status_col: str | None,
     text_columns: list[str],
+    type_col: str | None = None,
+    classification_col: str | None = None,
+    date_col: str | None = None,
 ) -> MonthAnalysis:
     if not attendance_time_col:
         raise ValueError("Selecione a coluna de tempo de atendimento.")
@@ -241,12 +323,20 @@ def analyze_month(
     if not text_columns:
         text_columns = [col for col in data.columns if data[col].dtype == "object"]
 
-    status_text = data[status_col].apply(normalize_text) if status_col in data.columns else ""
+    has_status = bool(status_col and status_col in data.columns)
+    has_type = bool(type_col and type_col in data.columns)
+    has_classification = bool(classification_col and classification_col in data.columns)
+    has_date = bool(date_col and date_col in data.columns)
+
     data["_texto_analise"] = data.apply(lambda row: _row_text(row, text_columns), axis=1)
-    if isinstance(status_text, pd.Series):
-        data["_texto_status"] = status_text
-    else:
-        data["_texto_status"] = ""
+    data["_texto_status"] = data[status_col].apply(normalize_text) if has_status else ""
+    data["_status_label"] = data[status_col].apply(lambda value: _display_value(value, "Sem status")) if has_status else "Sem status"
+    data["_type_label"] = data[type_col].apply(lambda value: _display_value(value, "Nao identificado")) if has_type else "Nao identificado"
+    data["_classification_label"] = (
+        data[classification_col].apply(lambda value: _display_value(value, "Nao identificado"))
+        if has_classification
+        else "Nao identificado"
+    )
 
     data["_tma_seconds"] = data[attendance_time_col].apply(duration_to_seconds)
     if wait_time_col and wait_time_col in data.columns:
@@ -264,132 +354,181 @@ def analyze_month(
     filtered = data[data["_recorte_mudanca"]].copy()
     total_file = len(data)
     total_change = len(filtered)
-    general_inactivity = int(data["_inatividade"].sum())
+    total_inactivity = int(filtered["_inatividade"].sum())
+    no_inactivity = filtered[~filtered["_inatividade"]]
+    period = _period_from_dates(filtered[date_col] if has_date else None)
 
-    summary_row = {
+    comparison_row = {
         "Mes": month,
-        "Total do arquivo": total_file,
-        "Total mudanca endereco + comodo": total_change,
-        "TMA geral": _mean(data["_tma_seconds"]),
-        "TME geral": _mean(data["_tme_seconds"]),
-        "Inatividade geral": general_inactivity,
-        "% inatividade geral": _pct(general_inactivity, total_file),
+        "Total de atendimentos": total_change,
+        "Periodo": period,
+        "TMA geral": _mean(filtered["_tma_seconds"]),
+        "TME geral": _mean(filtered["_tme_seconds"]),
+        "Mediana geral": _median(filtered["_tma_seconds"]),
+        "TMA sem inatividade": _mean(no_inactivity["_tma_seconds"]),
+        "Mediana sem inatividade": _median(no_inactivity["_tma_seconds"]),
+        "Maior tempo": float(filtered["_tma_seconds"].max()) if total_change else 0.0,
+        "Inatividade": total_inactivity,
+        "% Inatividade": _pct(total_inactivity, total_change),
+        "Finalizados": int(filtered["_finalizado"].sum()) if total_change else 0,
+        "% Finalizacao": _pct(int(filtered["_finalizado"].sum()), total_change),
     }
-
-    group_rows: list[dict[str, Any]] = []
-    for group in TAX_GROUPS:
-        subset = filtered[filtered["_grupo_taxa"] == group]
-        volume = len(subset)
-        inactivity = int(subset["_inatividade"].sum()) if volume else 0
-        finished = int(subset["_finalizado"].sum()) if volume else 0
-        group_rows.append(
-            {
-                "Mes": month,
-                "Grupo": group,
-                "Volume": volume,
-                "TMA": _mean(subset["_tma_seconds"]),
-                "Mediana TMA": _median(subset["_tma_seconds"]),
-                "TME": _mean(subset["_tme_seconds"]),
-                "Mediana TME": _median(subset["_tme_seconds"]),
-                "Inatividade": inactivity,
-                "% Inatividade": _pct(inactivity, volume),
-                "Finalizados": finished,
-                "% Finalizacao": _pct(finished, volume),
-            }
-        )
 
     return MonthAnalysis(
         month=month,
+        period=period,
         total_file=total_file,
         total_change=total_change,
         total_with_fee=int((filtered["_grupo_taxa"] == "Com taxa").sum()) if total_change else 0,
         total_without_fee=int((filtered["_grupo_taxa"] == "Sem taxa").sum()) if total_change else 0,
         total_unknown_fee=int((filtered["_grupo_taxa"] == UNKNOWN_FEE_GROUP).sum()) if total_change else 0,
-        general_inactivity=general_inactivity,
-        general_inactivity_pct=summary_row["% inatividade geral"],
-        general_tma_seconds=summary_row["TMA geral"],
-        general_tme_seconds=summary_row["TME geral"],
-        change_tma_seconds=_mean(filtered["_tma_seconds"]),
-        change_tme_seconds=_mean(filtered["_tme_seconds"]),
-        summary_row=summary_row,
-        group_rows=group_rows,
+        general_inactivity=total_inactivity,
+        general_inactivity_pct=comparison_row["% Inatividade"],
+        general_tma_seconds=comparison_row["TMA geral"],
+        general_tme_seconds=comparison_row["TME geral"],
+        median_tma_seconds=comparison_row["Mediana geral"],
+        tma_without_inactivity_seconds=comparison_row["TMA sem inatividade"],
+        median_without_inactivity_seconds=comparison_row["Mediana sem inatividade"],
+        max_tma_seconds=comparison_row["Maior tempo"],
+        comparison_row=comparison_row,
+        fee_rows=_fee_rows(filtered, month),
+        status_rows=_metric_rows(filtered, month, "_status_label", "Status", total_change),
+        type_rows=_metric_rows(filtered, month, "_type_label", "Tipo", total_change),
+        classification_rows=_metric_rows(filtered, month, "_classification_label", "Classificacao", total_change, top_n=12),
         filtered_data=filtered,
     )
 
 
-def build_summary_dataframe(analyses: list[MonthAnalysis]) -> pd.DataFrame:
-    return pd.DataFrame([analysis.summary_row for analysis in analyses])
+def build_comparison_dataframe(analyses: list[MonthAnalysis]) -> pd.DataFrame:
+    return pd.DataFrame([analysis.comparison_row for analysis in analyses])
 
 
-def build_group_dataframe(analyses: list[MonthAnalysis]) -> pd.DataFrame:
+def build_fee_dataframe(analyses: list[MonthAnalysis]) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for analysis in analyses:
-        rows.extend(analysis.group_rows)
+        rows.extend(analysis.fee_rows)
     return pd.DataFrame(rows)
 
 
-def format_summary_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+def build_status_dataframe(analyses: list[MonthAnalysis]) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for analysis in analyses:
+        rows.extend(analysis.status_rows)
+    return pd.DataFrame(rows)
+
+
+def build_type_dataframe(analyses: list[MonthAnalysis]) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for analysis in analyses:
+        rows.extend(analysis.type_rows)
+    return pd.DataFrame(rows)
+
+
+def build_classification_dataframe(analyses: list[MonthAnalysis]) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for analysis in analyses:
+        rows.extend(analysis.classification_rows)
+    return pd.DataFrame(rows)
+
+
+def build_summary_dataframe(analyses: list[MonthAnalysis]) -> pd.DataFrame:
+    return build_comparison_dataframe(analyses)
+
+
+def build_group_dataframe(analyses: list[MonthAnalysis]) -> pd.DataFrame:
+    return build_fee_dataframe(analyses)
+
+
+def _format_duration_columns(df: pd.DataFrame, columns: tuple[str, ...]) -> pd.DataFrame:
     formatted = df.copy()
-    for column in ("TMA geral", "TME geral"):
-        formatted[column] = formatted[column].apply(format_seconds)
-    formatted["% inatividade geral"] = formatted["% inatividade geral"].map(lambda value: f"{value:.2f}%")
+    for column in columns:
+        if column in formatted.columns:
+            formatted[column] = formatted[column].apply(format_seconds)
     return formatted
+
+
+def _format_percent_columns(df: pd.DataFrame, columns: tuple[str, ...]) -> pd.DataFrame:
+    formatted = df.copy()
+    for column in columns:
+        if column in formatted.columns:
+            formatted[column] = formatted[column].map(lambda value: f"{float(value):.1f}%")
+    return formatted
+
+
+def format_comparison_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    formatted = _format_duration_columns(
+        df,
+        (
+            "TMA geral",
+            "TME geral",
+            "Mediana geral",
+            "TMA sem inatividade",
+            "Mediana sem inatividade",
+            "Maior tempo",
+        ),
+    )
+    return _format_percent_columns(formatted, ("% Inatividade", "% Finalizacao"))
+
+
+def format_metric_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    formatted = _format_duration_columns(df, ("Media", "Mediana"))
+    return _format_percent_columns(formatted, ("% Volume", "% Inatividade"))
+
+
+def format_fee_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    return _format_percent_columns(df, ("%",))
+
+
+def format_summary_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    return format_comparison_dataframe(df)
 
 
 def format_group_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    formatted = df.copy()
-    for column in ("TMA", "Mediana TMA", "TME", "Mediana TME"):
-        formatted[column] = formatted[column].apply(format_seconds)
-    for column in ("% Inatividade", "% Finalizacao"):
-        formatted[column] = formatted[column].map(lambda value: f"{value:.2f}%")
-    return formatted
+    return format_fee_dataframe(df)
 
 
-def automatic_conclusion(analyses: list[MonthAnalysis], group_df: pd.DataFrame) -> str:
+def automatic_conclusion(analyses: list[MonthAnalysis], status_df: pd.DataFrame, classification_df: pd.DataFrame) -> str:
     if len(analyses) != 2:
         return "A analise foi processada com sucesso para o periodo informado."
 
     first, second = analyses
     messages: list[str] = []
 
-    if first.general_tme_seconds == 0 and second.general_tme_seconds == 0:
-        messages.append("Nao houve impacto relevante de fila/espera nos arquivos analisados, pois o TME geral ficou zerado.")
-    else:
-        higher_tme = max(analyses, key=lambda item: item.general_tme_seconds)
+    higher_tma = first if first.general_tma_seconds >= second.general_tma_seconds else second
+    lower_tma = second if higher_tma is first else first
+    diff = abs(first.general_tma_seconds - second.general_tma_seconds)
+    messages.append(
+        f"{higher_tma.month} apresentou maior TMA geral ({format_seconds(higher_tma.general_tma_seconds)}), "
+        f"diferenca de {format_seconds(diff)} em relacao a {lower_tma.month}."
+    )
+
+    if first.general_inactivity_pct or second.general_inactivity_pct:
+        higher_inactivity = first if first.general_inactivity_pct >= second.general_inactivity_pct else second
         messages.append(
-            f"O maior TME geral foi observado em {higher_tme.month}, com {format_seconds(higher_tme.general_tme_seconds)}."
+            f"A maior inatividade ficou em {higher_inactivity.month}, com "
+            f"{higher_inactivity.general_inactivity} casos ({higher_inactivity.general_inactivity_pct:.1f}%)."
         )
 
-    diff = abs(first.change_tma_seconds - second.change_tma_seconds)
-    if diff > 0:
-        higher_tma = first if first.change_tma_seconds > second.change_tma_seconds else second
+    finalized = status_df[status_df["Status"].apply(normalize_text).str.contains("finalizado", regex=False)]
+    finalized = finalized[~finalized["Status"].apply(normalize_text).str.contains("inatividade", regex=False)]
+    if not finalized.empty:
+        best_finalized = finalized.sort_values("Mediana").iloc[0]
         messages.append(
-            f"No recorte de mudanca de endereco + comodo, {higher_tma.month} apresentou TMA maior "
-            f"({format_seconds(higher_tma.change_tma_seconds)}), diferenca de {format_seconds(diff)}."
+            f"Quando o atendimento finaliza de fato, a melhor mediana esta em {best_finalized['Mes']} "
+            f"({format_seconds(best_finalized['Mediana'])})."
         )
 
-    if not group_df.empty:
-        active_groups = group_df[group_df["Volume"] > 0]
-        if not active_groups.empty:
-            highest_inactivity = active_groups.sort_values("% Inatividade", ascending=False).iloc[0]
-            if highest_inactivity["% Inatividade"] > 0:
-                messages.append(
-                    f"O maior percentual de inatividade no recorte esta em {highest_inactivity['Mes']} "
-                    f"no grupo {highest_inactivity['Grupo']}, com {highest_inactivity['% Inatividade']:.2f}%."
-                )
+    if not classification_df.empty:
+        bottleneck = classification_df.sort_values(["Inatividade", "% Inatividade", "Media"], ascending=False).iloc[0]
+        if bottleneck["Inatividade"] > 0:
+            messages.append(
+                f"O principal gargalo aparece em {bottleneck['Mes']} na classificacao {bottleneck['Classificacao']}, "
+                f"com {int(bottleneck['Inatividade'])} inatividades."
+            )
 
-            without_fee = active_groups[active_groups["Grupo"] == "Sem taxa"]
-            if not without_fee.empty and without_fee["% Inatividade"].max() <= 10:
-                messages.append("Os atendimentos sem taxa apresentam baixa inatividade no periodo analisado.")
-
-    unknown_total = sum(analysis.total_unknown_fee for analysis in analyses)
-    change_total = sum(analysis.total_change for analysis in analyses)
-    if change_total and unknown_total / change_total >= 0.25:
+    if sum(item.total_unknown_fee for item in analyses):
         messages.append(
-            "Ha volume relevante sem identificacao clara de taxa; recomenda-se melhorar a marcacao nos campos de tags, assunto ou classificacao."
+            "A contagem de taxa deve ser lida separadamente do TMA, pois muitos atendimentos tem tag geral de mudanca sem marcacao clara de cobranca."
         )
-
-    if not messages:
-        messages.append("Os indicadores ficaram estaveis entre os meses analisados, sem variacao critica aparente.")
 
     return " ".join(messages)

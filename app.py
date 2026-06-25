@@ -9,11 +9,15 @@ import streamlit as st
 from utils.analise_atendimento import (
     analyze_month,
     automatic_conclusion,
-    build_group_dataframe,
-    build_summary_dataframe,
+    build_classification_dataframe,
+    build_comparison_dataframe,
+    build_fee_dataframe,
+    build_status_dataframe,
+    build_type_dataframe,
     detect_columns,
-    format_group_dataframe,
-    format_summary_dataframe,
+    format_comparison_dataframe,
+    format_fee_dataframe,
+    format_metric_dataframe,
     textual_columns_warning,
 )
 from utils.graficos import create_figures
@@ -80,6 +84,9 @@ def _column_controls(df: pd.DataFrame, detected: dict, key_prefix: str) -> dict:
     tma_default = detected.get("attendance_time")
     wait_default = detected.get("wait_time")
     status_default = detected.get("status")
+    type_default = detected.get("type")
+    classification_default = detected.get("classification")
+    date_default = detected.get("date")
     text_default = detected.get("text_columns") or []
 
     attendance_time_col = st.selectbox(
@@ -102,6 +109,26 @@ def _column_controls(df: pd.DataFrame, detected: dict, key_prefix: str) -> dict:
         index=_select_index(required_options, status_default),
         key=f"{key_prefix}_status",
     )
+    type_col = st.selectbox(
+        "Coluna de tipo de atendimento",
+        required_options,
+        index=_select_index(required_options, type_default),
+        key=f"{key_prefix}_type",
+        help="Exemplo: Humano, Misto ou Automatico.",
+    )
+    classification_col = st.selectbox(
+        "Coluna de classificacao",
+        required_options,
+        index=_select_index(required_options, classification_default),
+        key=f"{key_prefix}_classification",
+    )
+    date_col = st.selectbox(
+        "Coluna de data de abertura/entrada",
+        required_options,
+        index=_select_index(required_options, date_default),
+        key=f"{key_prefix}_date",
+        help="Usada para exibir o periodo analisado.",
+    )
     text_columns = st.multiselect(
         "Campos textuais para identificar mudanca e taxa",
         columns,
@@ -118,29 +145,33 @@ def _column_controls(df: pd.DataFrame, detected: dict, key_prefix: str) -> dict:
         "attendance_time_col": attendance_time_col or None,
         "wait_time_col": None if wait_time_col == "Usar TME = 0" else wait_time_col,
         "status_col": status_col or None,
+        "type_col": type_col or None,
+        "classification_col": classification_col or None,
+        "date_col": date_col or None,
         "text_columns": text_columns,
     }
 
 
 def _render_metrics(analyses) -> None:
     cols = st.columns(4)
-    total_file = sum(item.total_file for item in analyses)
     total_change = sum(item.total_change for item in analyses)
     total_inactivity = sum(item.general_inactivity for item in analyses)
     avg_tma = sum(item.general_tma_seconds for item in analyses) / len(analyses)
+    avg_tme = sum(item.general_tme_seconds for item in analyses) / len(analyses)
 
-    cols[0].metric("Total nos arquivos", f"{total_file:,}".replace(",", "."))
-    cols[1].metric("Total no recorte", f"{total_change:,}".replace(",", "."))
+    cols[0].metric("Total no recorte", f"{total_change:,}".replace(",", "."))
+    cols[1].metric("TMA medio", format_seconds(avg_tma))
     cols[2].metric("Inatividade geral", f"{total_inactivity:,}".replace(",", "."))
-    cols[3].metric("TMA medio geral", format_seconds(avg_tma))
+    cols[3].metric("TME medio", format_seconds(avg_tme))
 
 
 def _render_analysis(results: dict) -> None:
     analyses = results["analyses"]
-    summary_df = results["summary_df"]
-    group_df = results["group_df"]
-    formatted_summary = results["formatted_summary"]
-    formatted_group = results["formatted_group"]
+    formatted_comparison = results["formatted_comparison"]
+    formatted_fee = results["formatted_fee"]
+    formatted_status = results["formatted_status"]
+    formatted_type = results["formatted_type"]
+    formatted_classification = results["formatted_classification"]
     figures = results["figures"]
     conclusion = results["conclusion"]
     months = results["months"]
@@ -150,10 +181,16 @@ def _render_analysis(results: dict) -> None:
     _render_metrics(analyses)
 
     st.subheader("Tabelas comparativas")
-    st.caption("Resumo geral dos meses")
-    st.dataframe(formatted_summary, use_container_width=True, hide_index=True)
-    st.caption("Recorte com taxa / sem taxa / sem identificacao")
-    st.dataframe(formatted_group, use_container_width=True, hide_index=True)
+    st.caption("Comparacao principal de TMA, TME e inatividade")
+    st.dataframe(formatted_comparison, use_container_width=True, hide_index=True)
+    st.caption("Status dos atendimentos")
+    st.dataframe(formatted_status, use_container_width=True, hide_index=True)
+    st.caption("Tipo de atendimento")
+    st.dataframe(formatted_type, use_container_width=True, hide_index=True)
+    st.caption("Gargalo por classificacao")
+    st.dataframe(formatted_classification, use_container_width=True, hide_index=True)
+    st.caption("Contagem de taxa")
+    st.dataframe(formatted_fee, use_container_width=True, hide_index=True)
 
     st.subheader("Graficos comparativos")
     for title, figure in figures:
@@ -169,8 +206,11 @@ def _render_analysis(results: dict) -> None:
         pdf_bytes = generate_pdf(
             output_path=output_path,
             months=months,
-            summary_df=formatted_summary,
-            group_df=formatted_group,
+            comparison_df=formatted_comparison,
+            status_df=formatted_status,
+            type_df=formatted_type,
+            classification_df=formatted_classification,
+            fee_df=formatted_fee,
             figures=figures,
             conclusion=conclusion,
         )
@@ -189,7 +229,7 @@ def _render_analysis(results: dict) -> None:
 
 
 st.title("Analise comparativa de relatorios CSV de atendimento")
-st.caption("Mudanca de Endereco + Mudanca de Comodo | TMA, TME, inatividade e taxa")
+st.caption("Mudanca de Endereco + Mudanca de Comodo | TMA, TME, status, classificacao e contagem de taxa")
 
 left, right = st.columns(2)
 with left:
@@ -248,17 +288,26 @@ if analyze_clicked:
             analysis_1 = analyze_month(result_1.dataframe, month_1, **controls_1)
             analysis_2 = analyze_month(result_2.dataframe, month_2, **controls_2)
             analyses = [analysis_1, analysis_2]
-            summary_df = build_summary_dataframe(analyses)
-            group_df = build_group_dataframe(analyses)
-            figures = create_figures(summary_df, group_df)
+            comparison_df = build_comparison_dataframe(analyses)
+            fee_df = build_fee_dataframe(analyses)
+            status_df = build_status_dataframe(analyses)
+            type_df = build_type_dataframe(analyses)
+            classification_df = build_classification_dataframe(analyses)
+            figures = create_figures(comparison_df, status_df, type_df, classification_df, fee_df)
             st.session_state["analysis_results"] = {
                 "analyses": analyses,
-                "summary_df": summary_df,
-                "group_df": group_df,
-                "formatted_summary": format_summary_dataframe(summary_df),
-                "formatted_group": format_group_dataframe(group_df),
+                "comparison_df": comparison_df,
+                "fee_df": fee_df,
+                "status_df": status_df,
+                "type_df": type_df,
+                "classification_df": classification_df,
+                "formatted_comparison": format_comparison_dataframe(comparison_df),
+                "formatted_fee": format_fee_dataframe(fee_df),
+                "formatted_status": format_metric_dataframe(status_df),
+                "formatted_type": format_metric_dataframe(type_df),
+                "formatted_classification": format_metric_dataframe(classification_df),
                 "figures": figures,
-                "conclusion": automatic_conclusion(analyses, group_df),
+                "conclusion": automatic_conclusion(analyses, status_df, classification_df),
                 "months": (month_1, month_2),
             }
         except Exception as exc:  # noqa: BLE001 - keep UI friendly.

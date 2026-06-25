@@ -5,10 +5,11 @@ Aplicativo web em Python com Streamlit para comparar dois relatorios CSV de aten
 ## O que o app faz
 
 - Le dois CSVs lado a lado, com deteccao de separador e encoding.
-- Identifica automaticamente colunas provaveis de TMA, TME, status e campos textuais.
+- Identifica automaticamente colunas provaveis de TMA, TME, status, tipo, classificacao, data e campos textuais.
 - Permite ajuste manual das colunas quando a deteccao automatica nao for suficiente.
 - Filtra atendimentos de mudanca de endereco e mudanca de comodo como um unico grupo.
-- Classifica o recorte em `Com taxa`, `Sem taxa` e `Sem identificacao clara de taxa`.
+- Calcula TMA/TME geral, mediana, TMA sem inatividade, status, tipo e gargalos por classificacao.
+- Conta separadamente `Com taxa`, `Sem taxa` e `Sem identificacao clara de taxa`.
 - Exibe cards, tabelas comparativas, graficos e conclusao automatica antes de gerar o PDF.
 - Gera relatorio PDF local e disponibiliza download pelo Streamlit.
 
