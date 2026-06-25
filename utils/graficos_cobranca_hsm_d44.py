@@ -4,9 +4,6 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-from .tratamento_tempo import format_seconds
-
-
 def _bar(df: pd.DataFrame, x: str, y: str, title: str, color: str | None = None, text: str | None = None) -> go.Figure:
     fig = px.bar(df, x=x, y=y, color=color, barmode="group", text=text, title=title)
     fig.update_traces(textposition="outside", cliponaxis=False)
@@ -31,11 +28,7 @@ def create_d44_figures(
         figures.append(("HSM - Pagar agora x Preciso ajuda x Nao respondeu", _bar(hsm_focus, "Opcao", "Volume", "HSM - opcoes selecionadas", text="Volume")))
 
     if not proposal_df.empty:
-        figures.append(("Resultado das propostas", _bar(proposal_df, "Resultado / proposta", "Volume", "Resultado das propostas", text="Volume")))
-        proposal_plot = proposal_df.copy()
-        proposal_plot["TMA (min)"] = proposal_plot["TMA"] / 60
-        proposal_plot["TMA texto"] = proposal_plot["TMA"].apply(format_seconds)
-        figures.append(("TMA por proposta", _bar(proposal_plot, "Resultado / proposta", "TMA (min)", "TMA por proposta", text="TMA texto")))
+        figures.append(("Resultado das propostas (volume)", _bar(proposal_df, "Resultado / proposta", "Volume", "Resultado das propostas (volume)", text="Volume")))
 
     if not proposal_cross_df.empty:
         figures.append(("Proposta x negociacao realizada", _bar(proposal_cross_df, "Grupo", "Negociacao realizada", "Proposta x negociacao realizada", text="Negociacao realizada")))
@@ -47,6 +40,8 @@ def create_d44_figures(
         figures.append(("Finalizacao real x inatividade", _bar(status_rate, "Status", "Volume", "Finalizacao real x inatividade", color="Indicador", text="Volume")))
 
     if not daily_df.empty:
+        from .tratamento_tempo import format_seconds
+
         figures.append(("Inatividade por dia", _bar(daily_df, "Data", "Inatividade", "Inatividade por dia", text="Inatividade")))
         figures.append(("Volume por dia", _bar(daily_df, "Data", "Volume", "Volume por dia", text="Volume")))
         daily_plot = daily_df.copy()
@@ -55,4 +50,3 @@ def create_d44_figures(
         figures.append(("TMA por dia", _bar(daily_plot, "Data", "TMA (min)", "TMA por dia", text="TMA texto")))
 
     return figures
-

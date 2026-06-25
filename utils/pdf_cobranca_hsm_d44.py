@@ -196,13 +196,12 @@ def generate_d44_pdf(
     graph_specs = [
         ("Status dos atendimentos", _bar_image(status_df, "Status", "Volume", "Status dos atendimentos")),
         ("HSM - opcoes selecionadas", _bar_image(hsm_df[hsm_df.get("Opcao", pd.Series(dtype=str)).isin(["Pagar agora", "Preciso ajuda", "Nao respondeu"])] if not hsm_df.empty else hsm_df, "Opcao", "Volume", "HSM - opcoes selecionadas")),
-        ("Resultado das propostas", _bar_image(proposal_df, "Resultado / proposta", "Volume", "Resultado das propostas")),
+        ("Resultado das propostas (volume)", _bar_image(proposal_df, "Resultado / proposta", "Volume", "Resultado das propostas (volume)")),
         ("Proposta x negociacao realizada", _bar_image(proposal_cross_df, "Grupo", "Negociacao realizada", "Proposta x negociacao realizada")),
         ("Inatividade por status", _bar_image(status_df, "Status", "Inatividade", "Inatividade por status", color="#dc2626")),
         ("Inatividade por dia", _bar_image(daily_df, "Data", "Inatividade", "Inatividade por dia", color="#dc2626")),
         ("Volume por dia", _bar_image(daily_df, "Data", "Volume", "Volume por dia")),
         ("TMA por dia", _bar_image(daily_df, "Data", "TMA", "TMA por dia")),
-        ("TMA por proposta", _bar_image(proposal_df, "Resultado / proposta", "TMA", "TMA por proposta")),
         ("Finalizacao real x inatividade", _stacked_image(status_df, "Status", ["Finalizados reais", "Inatividade"], "Finalizacao real x inatividade")),
     ]
 
