@@ -38,10 +38,22 @@ from utils.analise_cobranca_ia import (
     format_metric_table,
     format_tag_table,
 )
+from utils.analise_cobranca_hsm_d44 import (
+    LOW_D44_VOLUME_MESSAGE,
+    LOW_D44_VOLUME_THRESHOLD,
+    analyze_d44,
+    build_d44_comparison_dataframe,
+    combine_rows,
+    detect_d44_columns,
+    format_d44_metric_table,
+    format_d44_summary,
+)
 from utils.graficos import create_figures
 from utils.graficos_cobranca_ia import create_charge_ai_figures
+from utils.graficos_cobranca_hsm_d44 import create_d44_figures
 from utils.leitura_csv import CsvReadError, read_csv_flexible, readable_column_options
 from utils.pdf_cobranca_ia import generate_charge_ai_pdf
+from utils.pdf_cobranca_hsm_d44 import generate_d44_pdf
 from utils.pdf_report import generate_pdf
 from utils.tratamento_tempo import format_seconds
 
@@ -185,6 +197,228 @@ def _build_charge_ai_excel_bytes(results: dict) -> bytes:
         results["recurrence_df"].to_excel(writer, sheet_name="Recorrencia", index=False)
         results["daily_df"].to_excel(writer, sheet_name="Por Dia", index=False)
     return output.getvalue()
+
+
+def _build_d44_excel_bytes(results: dict) -> bytes:
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        results["summary_df"].to_excel(writer, sheet_name="Resumo Executivo D44", index=False)
+        results["comparison_df"].to_excel(writer, sheet_name="Comparacao", index=False)
+        results["status_df"].to_excel(writer, sheet_name="Status", index=False)
+        results["type_df"].to_excel(writer, sheet_name="Tipo", index=False)
+        results["classification_df"].to_excel(writer, sheet_name="Classificacao", index=False)
+        results["hsm_df"].to_excel(writer, sheet_name="HSM Opcao", index=False)
+        results["proposal_df"].to_excel(writer, sheet_name="Resultado Propostas", index=False)
+        results["proposal_cross_df"].to_excel(writer, sheet_name="Proposta x Negociacao", index=False)
+        results["charge_df"].to_excel(writer, sheet_name="Tags Cobranca", index=False)
+        results["daily_df"].to_excel(writer, sheet_name="Por Dia", index=False)
+        filtered = _d44_filtered_base_dataframe(results["analyses"])
+        if not filtered.empty:
+            filtered.to_excel(writer, sheet_name="Base D44", index=False)
+    return output.getvalue()
+
+
+def _d44_filtered_base_dataframe(analyses) -> pd.DataFrame:
+    rows = []
+    audit_cols = {
+        "_hsm_opcao": "Opcao HSM",
+        "_finalizado_real": "Finalizado real",
+        "_inatividade": "Inatividade",
+        "_pendente": "Pendente",
+        "_transferido": "Transferido",
+        "_tma_seconds": "TMA segundos",
+        "_tme_seconds": "TME segundos",
+        "_pending_seconds": "Pendencia segundos",
+    }
+    for analysis in analyses:
+        data = analysis.prepared_data.copy()
+        if data.empty:
+            continue
+        original_cols = [col for col in data.columns if not str(col).startswith("_")]
+        keep_cols = original_cols + [col for col in audit_cols if col in data.columns]
+        exported = data[keep_cols].rename(columns=audit_cols)
+        exported.insert(0, "Mes analisado", analysis.month)
+        rows.append(exported)
+    return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
+
+
+def _render_d44_analysis(results: dict) -> None:
+    analyses = results["analyses"]
+    formatted_summary = results["formatted_summary"]
+    formatted_comparison = results["formatted_comparison"]
+    formatted_status = results["formatted_status"]
+    formatted_type = results["formatted_type"]
+    formatted_classification = results["formatted_classification"]
+    formatted_hsm = results["formatted_hsm"]
+    formatted_proposal = results["formatted_proposal"]
+    formatted_proposal_cross = results["formatted_proposal_cross"]
+    formatted_charge = results["formatted_charge"]
+    formatted_daily = results["formatted_daily"]
+    figures = results["figures"]
+    conclusion = results["conclusion"]
+
+    st.markdown('<div class="section-title"></div>', unsafe_allow_html=True)
+    st.subheader("Analise de Cobranca HSM D44")
+
+    for analysis in analyses:
+        for warning in analysis.warnings:
+            st.warning(f"{analysis.month}: {warning}")
+        if analysis.total_d44 == 0:
+            st.warning(f"{analysis.month}: Nenhum atendimento de Cobranca HSM D44 foi encontrado neste arquivo.")
+        elif analysis.total_d44 < LOW_D44_VOLUME_THRESHOLD:
+            st.warning(f"{analysis.month}: {LOW_D44_VOLUME_MESSAGE}")
+
+    total_d44 = sum(item.summary_row.get("Total de atendimentos D44", 0) for item in analyses)
+    total_file = sum(item.summary_row.get("Total de atendimentos no arquivo", 0) for item in analyses)
+    total_inactivity = sum(item.summary_row.get("Finalizados por inatividade", 0) for item in analyses)
+    total_finished = sum(item.summary_row.get("Finalizados reais", 0) for item in analyses)
+    total_pending = sum(item.summary_row.get("Atendimento pendente", 0) for item in analyses)
+    total_transferred = sum(item.summary_row.get("Transferidos", 0) for item in analyses)
+    total_pagar = sum(item.summary_row.get("Pagar agora", 0) for item in analyses)
+    total_ajuda = sum(item.summary_row.get("Preciso ajuda", 0) for item in analyses)
+    total_no_answer = sum(item.summary_row.get("Nao respondeu", 0) for item in analyses)
+    total_no_interest = sum(item.summary_row.get("Proposta sem juros", 0) for item in analyses)
+    total_discount = sum(item.summary_row.get("Proposta com desconto", 0) for item in analyses)
+    total_negotiation = sum(item.summary_row.get("Negociacao realizada", 0) for item in analyses)
+    weighted_tma = (
+        sum(item.summary_row.get("TMA geral", 0) * item.summary_row.get("Total de atendimentos D44", 0) for item in analyses) / total_d44
+        if total_d44
+        else 0
+    )
+    weighted_tme = (
+        sum(item.summary_row.get("TME medio", 0) * item.summary_row.get("Total de atendimentos D44", 0) for item in analyses) / total_d44
+        if total_d44
+        else 0
+    )
+    weighted_tma_no_inactivity = (
+        sum(item.summary_row.get("TMA sem inatividade", 0) * item.summary_row.get("Total de atendimentos D44", 0) for item in analyses) / total_d44
+        if total_d44
+        else 0
+    )
+    median_tma = analyses[0].summary_row.get("Mediana TMA", 0) if len(analyses) == 1 else results["comparison_df"]["Mediana TMA"].median()
+    period_label = " | ".join(f"{item.month}: {item.period}" for item in analyses)
+
+    metric_items = [
+        ("Total D44", total_d44),
+        ("Periodo", period_label),
+        ("TMA geral", format_seconds(weighted_tma)),
+        ("Mediana TMA", format_seconds(median_tma)),
+        ("TMA sem inatividade", format_seconds(weighted_tma_no_inactivity)),
+        ("TME geral", format_seconds(weighted_tme)),
+        ("Finalizados reais", total_finished),
+        ("% finalizacao real", f"{(total_finished / total_d44 * 100) if total_d44 else 0:.1f}%"),
+        ("Inatividade", total_inactivity),
+        ("% inatividade", f"{(total_inactivity / total_d44 * 100) if total_d44 else 0:.1f}%"),
+        ("Pendentes", total_pending),
+        ("Transferidos", total_transferred),
+        ("Pagar agora", total_pagar),
+        ("Preciso ajuda", total_ajuda),
+        ("Nao respondeu", total_no_answer),
+        ("Proposta sem juros", total_no_interest),
+        ("Proposta com desconto", total_discount),
+        ("Negociacao realizada", total_negotiation),
+    ]
+    for start in range(0, len(metric_items), 4):
+        cols = st.columns(4)
+        for col, (label, value) in zip(cols, metric_items[start : start + 4]):
+            col.metric(label, value)
+
+    st.subheader("Tabelas")
+    tabs = st.tabs(
+        [
+            "Resumo",
+            "Operacao",
+            "HSM",
+            "Propostas",
+            "Tags e dia",
+            "Downloads",
+        ]
+    )
+    with tabs[0]:
+        st.caption("Resumo executivo D44")
+        st.dataframe(formatted_summary, use_container_width=True, hide_index=True)
+        if len(analyses) > 1:
+            st.caption("Comparacao principal")
+            st.dataframe(formatted_comparison, use_container_width=True, hide_index=True)
+        st.info(conclusion)
+    with tabs[1]:
+        st.caption("Status dos atendimentos")
+        st.dataframe(formatted_status, use_container_width=True, hide_index=True)
+        st.caption("Tipo de atendimento")
+        st.dataframe(formatted_type, use_container_width=True, hide_index=True)
+        st.caption("Classificacao")
+        st.dataframe(formatted_classification, use_container_width=True, hide_index=True)
+    with tabs[2]:
+        st.caption("HSM - Opcao selecionada")
+        st.dataframe(formatted_hsm, use_container_width=True, hide_index=True)
+    with tabs[3]:
+        st.caption("Resultado das propostas")
+        st.dataframe(formatted_proposal, use_container_width=True, hide_index=True)
+        st.caption("Proposta x negociacao")
+        st.dataframe(formatted_proposal_cross, use_container_width=True, hide_index=True)
+    with tabs[4]:
+        st.caption("Tags de cobranca")
+        st.dataframe(formatted_charge, use_container_width=True, hide_index=True)
+        st.caption("Analise por dia")
+        if formatted_daily.empty:
+            st.warning("Coluna de data nao encontrada ou sem datas validas. Analise por dia nao gerada.")
+        else:
+            st.dataframe(formatted_daily, use_container_width=True, hide_index=True)
+    with tabs[5]:
+        st.download_button(
+            "Baixar Excel da analise",
+            data=_build_d44_excel_bytes(results),
+            file_name="analise_cobranca_hsm_d44.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        filtered_base = _d44_filtered_base_dataframe(analyses)
+        if not filtered_base.empty:
+            st.download_button(
+                "Baixar base D44 em CSV",
+                data=filtered_base.to_csv(index=False).encode("utf-8-sig"),
+                file_name="base_cobranca_hsm_d44.csv",
+                mime="text/csv",
+            )
+
+    st.subheader("Graficos")
+    for _title, figure in figures:
+        st.plotly_chart(figure, use_container_width=True)
+
+    st.subheader("Relatorio em PDF")
+    if st.button("Gerar PDF", type="primary", key="d44_pdf"):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = REPORT_DIR / f"relatorio_cobranca_hsm_d44_{timestamp}.pdf"
+        try:
+            with st.spinner("Gerando PDF da analise de Cobranca HSM D44..."):
+                pdf_bytes = generate_d44_pdf(
+                    output_path=output_path,
+                    period=period_label,
+                    summary_df=formatted_summary,
+                    comparison_df=formatted_comparison,
+                    status_df=formatted_status,
+                    type_df=formatted_type,
+                    classification_df=formatted_classification,
+                    hsm_df=formatted_hsm,
+                    proposal_df=formatted_proposal,
+                    proposal_cross_df=formatted_proposal_cross,
+                    charge_df=formatted_charge,
+                    daily_df=formatted_daily,
+                    conclusion=conclusion,
+                )
+            st.session_state["d44_pdf_bytes"] = pdf_bytes
+            st.session_state["d44_pdf_name"] = output_path.name
+            st.success(f"PDF gerado e salvo localmente em: {output_path}")
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Nao foi possivel gerar o PDF: {exc}")
+
+    if st.session_state.get("d44_pdf_bytes"):
+        st.download_button(
+            "Baixar PDF",
+            data=st.session_state["d44_pdf_bytes"],
+            file_name=st.session_state.get("d44_pdf_name", "relatorio_cobranca_hsm_d44.pdf"),
+            mime="application/pdf",
+            key="d44_pdf_download",
+        )
 
 
 def _render_charge_ai_analysis(results: dict) -> None:
@@ -525,13 +759,14 @@ st.caption("Mudanca de Endereco + Mudanca de Comodo | TMA, TME, status, classifi
 st.sidebar.header("Regras da analise")
 filter_label = st.sidebar.radio(
     "Recorte analisado",
-    ["Mudanca de Endereco + Mudanca de Comodo", "Arquivo inteiro", "Busca personalizada", "Cobranca com IA"],
+    ["Mudanca de Endereco + Mudanca de Comodo", "Arquivo inteiro", "Busca personalizada", "Cobranca com IA", "Cobranca HSM D44"],
 )
 filter_mode = {
     "Mudanca de Endereco + Mudanca de Comodo": FILTER_CHANGE,
     "Arquivo inteiro": FILTER_ALL,
     "Busca personalizada": FILTER_CUSTOM,
     "Cobranca com IA": "charge_ai",
+    "Cobranca HSM D44": "d44",
 }[filter_label]
 custom_filter_text = st.sidebar.text_area(
     "Termos da busca personalizada",
@@ -554,15 +789,22 @@ without_fee_terms = _parse_terms(without_fee_text)
 
 left, right = st.columns(2)
 with left:
-    st.subheader("Arquivo principal" if filter_mode == "charge_ai" else "Mes 1")
-    month_1 = st.text_input("Nome da analise" if filter_mode == "charge_ai" else "Nome do mes 1", value="Cobranca IA" if filter_mode == "charge_ai" else "Maio")
-    upload_1 = st.file_uploader("CSV da cobranca com IA" if filter_mode == "charge_ai" else "CSV do mes 1", type=["csv"], key="upload_1")
+    st.subheader("Arquivo principal" if filter_mode in {"charge_ai", "d44"} else "Mes 1")
+    default_name = "Cobranca IA" if filter_mode == "charge_ai" else "Cobranca HSM D44" if filter_mode == "d44" else "Maio"
+    month_1 = st.text_input("Nome da analise" if filter_mode in {"charge_ai", "d44"} else "Nome do mes 1", value=default_name)
+    upload_label = "CSV da cobranca com IA" if filter_mode == "charge_ai" else "CSV da Cobranca HSM D44" if filter_mode == "d44" else "CSV do mes 1"
+    upload_1 = st.file_uploader(upload_label, type=["csv"], key="upload_1")
 with right:
     if filter_mode == "charge_ai":
         st.subheader("Modo Cobranca com IA")
         st.info("Este modo usa o CSV completo enviado no arquivo principal. O segundo arquivo nao e necessario.")
         month_2 = "Comparativo"
         upload_2 = None
+    elif filter_mode == "d44":
+        st.subheader("Comparativo opcional")
+        st.info("Envie um segundo CSV se quiser comparar dois periodos D44. Com um CSV, o app analisa apenas o arquivo principal.")
+        month_2 = st.text_input("Nome do periodo 2", value="Comparativo D44")
+        upload_2 = st.file_uploader("CSV D44 do periodo 2 (opcional)", type=["csv"], key="upload_2")
     else:
         st.subheader("Mes 2")
         month_2 = st.text_input("Nome do mes 2", value="Junho")
@@ -593,21 +835,23 @@ if result_1 and result_2:
     col_map_1, col_map_2 = st.columns(2)
     with col_map_1:
         st.markdown(f"**{month_1}**")
-        detector_1 = detect_charge_ai_columns if filter_mode == "charge_ai" else detect_columns
+        detector_1 = detect_charge_ai_columns if filter_mode == "charge_ai" else detect_d44_columns if filter_mode == "d44" else detect_columns
         controls_1 = _column_controls(result_1.dataframe, detector_1(result_1.dataframe), "m1")
     with col_map_2:
         st.markdown(f"**{month_2}**")
-        detector_2 = detect_charge_ai_columns if filter_mode == "charge_ai" else detect_columns
+        detector_2 = detect_charge_ai_columns if filter_mode == "charge_ai" else detect_d44_columns if filter_mode == "d44" else detect_columns
         controls_2 = _column_controls(result_2.dataframe, detector_2(result_2.dataframe), "m2")
-elif filter_mode == "charge_ai" and result_1:
+elif filter_mode in {"charge_ai", "d44"} and result_1:
     st.subheader("Mapeamento de colunas")
-    controls_1 = _column_controls(result_1.dataframe, detect_charge_ai_columns(result_1.dataframe), "m1")
+    detector = detect_charge_ai_columns if filter_mode == "charge_ai" else detect_d44_columns
+    controls_1 = _column_controls(result_1.dataframe, detector(result_1.dataframe), "m1")
 
 analyze_clicked = st.button("Analisar", type="primary", use_container_width=True)
 
 if analyze_clicked:
     st.session_state.pop("pdf_bytes", None)
     st.session_state.pop("charge_ai_pdf_bytes", None)
+    st.session_state.pop("d44_pdf_bytes", None)
     try:
         if filter_mode == "charge_ai":
             if not upload_1:
@@ -668,6 +912,93 @@ if analyze_clicked:
             }
             st.session_state.pop("analysis_results", None)
             _render_charge_ai_analysis(st.session_state["charge_ai_results"])
+            st.stop()
+
+        if filter_mode == "d44":
+            if not upload_1:
+                st.warning("Envie pelo menos o CSV principal para iniciar a analise de Cobranca HSM D44.")
+                st.stop()
+            if not result_1 or (upload_2 and not result_2):
+                st.error("Corrija os erros de leitura dos arquivos antes de analisar.")
+                st.stop()
+            if not controls_1 or (result_2 and not controls_2):
+                st.error("Confira o mapeamento das colunas antes de analisar.")
+                st.stop()
+            if not controls_1["attendance_time_col"] or (controls_2 and not controls_2["attendance_time_col"]):
+                st.error("Selecione a coluna de tempo de atendimento (TMA).")
+                st.stop()
+
+            detected_1 = detect_d44_columns(result_1.dataframe)
+            analysis_1 = analyze_d44(
+                result_1.dataframe,
+                month_1,
+                attendance_time_col=controls_1["attendance_time_col"],
+                wait_time_col=controls_1["wait_time_col"],
+                status_col=controls_1["status_col"],
+                text_columns=controls_1["text_columns"],
+                type_col=controls_1["type_col"],
+                classification_col=controls_1["classification_col"],
+                date_col=controls_1["date_col"],
+                pending_time_col=detected_1.get("pending_time"),
+            )
+            analyses = [analysis_1]
+            if result_2 and controls_2:
+                detected_2 = detect_d44_columns(result_2.dataframe)
+                analyses.append(
+                    analyze_d44(
+                        result_2.dataframe,
+                        month_2,
+                        attendance_time_col=controls_2["attendance_time_col"],
+                        wait_time_col=controls_2["wait_time_col"],
+                        status_col=controls_2["status_col"],
+                        text_columns=controls_2["text_columns"],
+                        type_col=controls_2["type_col"],
+                        classification_col=controls_2["classification_col"],
+                        date_col=controls_2["date_col"],
+                        pending_time_col=detected_2.get("pending_time"),
+                    )
+                )
+
+            summary_df = pd.DataFrame([analysis.summary_row for analysis in analyses])
+            comparison_df = build_d44_comparison_dataframe(analyses)
+            status_df = combine_rows(analyses, "status_rows")
+            type_df = combine_rows(analyses, "type_rows")
+            classification_df = combine_rows(analyses, "classification_rows")
+            hsm_df = combine_rows(analyses, "hsm_rows")
+            proposal_df = combine_rows(analyses, "proposal_rows")
+            proposal_cross_df = combine_rows(analyses, "proposal_cross_rows")
+            charge_df = combine_rows(analyses, "charge_rows")
+            daily_df = combine_rows(analyses, "daily_rows")
+            figures = create_d44_figures(status_df, hsm_df, proposal_df, proposal_cross_df, daily_df)
+            conclusion = " ".join(f"{analysis.month}: {analysis.conclusion}" for analysis in analyses)
+            st.session_state["d44_results"] = {
+                "analyses": analyses,
+                "summary_df": summary_df,
+                "comparison_df": comparison_df,
+                "status_df": status_df,
+                "type_df": type_df,
+                "classification_df": classification_df,
+                "hsm_df": hsm_df,
+                "proposal_df": proposal_df,
+                "proposal_cross_df": proposal_cross_df,
+                "charge_df": charge_df,
+                "daily_df": daily_df,
+                "formatted_summary": format_d44_summary(summary_df),
+                "formatted_comparison": format_d44_summary(comparison_df),
+                "formatted_status": format_d44_metric_table(status_df),
+                "formatted_type": format_d44_metric_table(type_df),
+                "formatted_classification": format_d44_metric_table(classification_df),
+                "formatted_hsm": format_d44_metric_table(hsm_df),
+                "formatted_proposal": format_d44_metric_table(proposal_df),
+                "formatted_proposal_cross": format_d44_metric_table(proposal_cross_df),
+                "formatted_charge": format_d44_metric_table(charge_df),
+                "formatted_daily": format_d44_metric_table(daily_df),
+                "figures": figures,
+                "conclusion": conclusion,
+            }
+            st.session_state.pop("analysis_results", None)
+            st.session_state.pop("charge_ai_results", None)
+            _render_d44_analysis(st.session_state["d44_results"])
             st.stop()
 
         if not upload_1 or not upload_2:
@@ -738,7 +1069,9 @@ if analyze_clicked:
     except Exception as exc:  # noqa: BLE001 - keep UI friendly.
         st.error(f"Nao foi possivel concluir a analise: {exc}")
 
-if filter_mode != "charge_ai" and st.session_state.get("analysis_results"):
+if filter_mode not in {"charge_ai", "d44"} and st.session_state.get("analysis_results"):
     _render_analysis(st.session_state["analysis_results"])
 if filter_mode == "charge_ai" and st.session_state.get("charge_ai_results"):
     _render_charge_ai_analysis(st.session_state["charge_ai_results"])
+if filter_mode == "d44" and st.session_state.get("d44_results"):
+    _render_d44_analysis(st.session_state["d44_results"])
