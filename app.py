@@ -73,6 +73,7 @@ from utils.graficos_cobranca_hsm_d44 import create_d44_figures
 from utils.leitura_csv import CsvReadError, read_csv_flexible, readable_column_options
 from utils.pdf_cobranca_ia import generate_charge_ai_pdf
 from utils.pdf_cobranca_hsm_d44 import generate_d44_pdf
+from utils.pdf_autosservico import generate_auto_service_pdf
 from utils.pdf_report import generate_pdf
 from utils.tratamento_tempo import format_seconds
 
@@ -989,6 +990,26 @@ def _auto_service_excel_bytes(results) -> bytes:
     return output.getvalue()
 
 
+def _auto_service_summary_pdf_df(summary: dict) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {"Indicador": "Total de registros analisados", "Resultado": f"{format_number(summary['Registros'])} linhas"},
+            {"Indicador": "Total de atendimentos/acionamentos", "Resultado": format_number(summary["Atendimentos"])},
+            {"Indicador": "OS geradas", "Resultado": format_number(summary["OS geradas"])},
+            {"Indicador": "OS executadas", "Resultado": format_number(summary["OS executadas"])},
+            {"Indicador": "Taxa de execucao de OS", "Resultado": format_percent(summary["% OS executadas"])},
+            {"Indicador": "Faturas geradas", "Resultado": format_number(summary["Faturas geradas"])},
+            {"Indicador": "Faturas pagas", "Resultado": format_number(summary["Faturas pagas"])},
+            {"Indicador": "Taxa de faturas pagas", "Resultado": format_percent(summary["% Faturas pagas"])},
+            {"Indicador": "Boletos isentos", "Resultado": format_number(summary["Boletos isentos"])},
+            {"Indicador": "Valor total das faturas", "Resultado": format_money(summary["Valor total"])},
+            {"Indicador": "Avaliacoes CSAT", "Resultado": format_number(summary["Avaliacoes CSAT"])},
+            {"Indicador": "CSAT 4 ou 5", "Resultado": format_percent(summary["% CSAT positivo"])},
+            {"Indicador": "CSAT menor ou igual a 3", "Resultado": format_percent(summary["% CSAT negativo"])},
+        ]
+    )
+
+
 def _auto_service_bar_chart(table: pd.DataFrame, label_col: str, value_col: str, title: str) -> None:
     if table.empty or label_col not in table.columns or value_col not in table.columns:
         st.info("Nao ha dados suficientes para montar este grafico.")
@@ -1020,6 +1041,8 @@ def _render_auto_service_analysis() -> None:
     analyze_clicked = st.button("Analisar", type="primary", use_container_width=True)
 
     if analyze_clicked:
+        st.session_state.pop("auto_service_pdf_bytes", None)
+        st.session_state.pop("auto_service_pdf_name", None)
         if uploaded_file is None:
             st.warning("Envie um arquivo CSV ou XLSX para iniciar a analise.")
             st.stop()
@@ -1141,6 +1164,37 @@ def _render_auto_service_analysis() -> None:
             file_name="analise_auto_servico.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
+        if st.button("Gerar PDF completo", type="primary", key="auto_service_pdf"):
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_path = REPORT_DIR / f"relatorio_auto_servico_{timestamp}.pdf"
+            try:
+                with st.spinner("Gerando PDF completo com logo Valenet..."):
+                    pdf_bytes = generate_auto_service_pdf(
+                        output_path=output_path,
+                        summary_df=_auto_service_summary_pdf_df(summary),
+                        service_df=format_auto_service_table(results.service_df),
+                        type_df=format_auto_service_table(results.type_df),
+                        channel_df=format_auto_service_table(results.channel_df),
+                        department_df=format_auto_service_table(results.department_df),
+                        diagnostic=results.diagnostic,
+                        bottlenecks=results.bottlenecks,
+                        odd_points=results.odd_points,
+                        conclusion=results.conclusion,
+                        recommendations=results.recommendations,
+                    )
+                st.session_state["auto_service_pdf_bytes"] = pdf_bytes
+                st.session_state["auto_service_pdf_name"] = output_path.name
+                st.success(f"PDF gerado e salvo localmente em: {output_path}")
+            except Exception as exc:  # noqa: BLE001 - keep UI friendly.
+                st.error(f"Nao foi possivel gerar o PDF: {exc}")
+        if st.session_state.get("auto_service_pdf_bytes"):
+            st.download_button(
+                "Baixar PDF",
+                data=st.session_state["auto_service_pdf_bytes"],
+                file_name=st.session_state.get("auto_service_pdf_name", "relatorio_auto_servico.pdf"),
+                mime="application/pdf",
+                key="auto_service_pdf_download",
+            )
         with st.expander("Colunas identificadas automaticamente"):
             st.json(results.detected_columns)
         with st.expander("Base carregada"):
