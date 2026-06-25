@@ -39,15 +39,30 @@ def normalize_column(text: Any) -> str:
     return normalized
 
 
-def find_column(df: pd.DataFrame, options: list[str]) -> str | None:
+def _is_percent_column(column: str) -> bool:
+    normalized = normalize_column(column)
+    return "%" in str(column) or normalized.startswith("percent") or normalized.startswith("perc")
+
+
+def find_column(df: pd.DataFrame, options: list[str], *, allow_percent: bool = True, prefer_percent: bool = False) -> str | None:
     column_map = {normalize_column(column): str(column) for column in df.columns}
+    candidates = [
+        (normalized, original)
+        for normalized, original in column_map.items()
+        if allow_percent or not _is_percent_column(original)
+    ]
+    if prefer_percent:
+        percent_candidates = [(normalized, original) for normalized, original in candidates if _is_percent_column(original)]
+        if percent_candidates:
+            candidates = percent_candidates
 
     for option in options:
         normalized_option = normalize_column(option)
-        if normalized_option in column_map:
-            return column_map[normalized_option]
+        for normalized_column, original_column in candidates:
+            if normalized_option == normalized_column:
+                return original_column
 
-    for normalized_column, original_column in column_map.items():
+    for normalized_column, original_column in candidates:
         for option in options:
             terms = normalize_column(option).split()
             if terms and all(term in normalized_column for term in terms):
@@ -56,17 +71,48 @@ def find_column(df: pd.DataFrame, options: list[str]) -> str | None:
     return None
 
 
+def _parse_numeric_value(value: Any) -> float:
+    if value is None or pd.isna(value):
+        return 0.0
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none", "null", "-"}:
+        return 0.0
+    text = text.replace("R$", "").replace("%", "").strip()
+    text = re.sub(r"[^0-9,.\-]", "", text)
+    if not text or text in {"-", ".", ","}:
+        return 0.0
+
+    has_comma = "," in text
+    has_dot = "." in text
+    if has_comma and has_dot:
+        text = text.replace(".", "").replace(",", ".")
+    elif has_comma:
+        text = text.replace(",", ".")
+    elif has_dot and re.fullmatch(r"-?\d{1,3}(?:\.\d{3})+", text):
+        text = text.replace(".", "")
+
+    try:
+        return float(text)
+    except ValueError:
+        return 0.0
+
+
 def convert_number(series: pd.Series | None) -> pd.Series:
     if series is None:
         return pd.Series(dtype=float)
+    if pd.api.types.is_numeric_dtype(series):
+        return pd.to_numeric(series, errors="coerce").fillna(0).astype(float)
+    return series.apply(_parse_numeric_value).astype(float)
 
-    values = series.astype(str).str.strip()
-    values = values.str.replace("R$", "", regex=False)
-    values = values.str.replace("%", "", regex=False)
-    values = values.str.replace(".", "", regex=False)
-    values = values.str.replace(",", ".", regex=False)
-    values = values.str.replace(r"[^0-9.\-]", "", regex=True)
-    return pd.to_numeric(values, errors="coerce").fillna(0)
+
+def convert_percent(series: pd.Series | None) -> pd.Series:
+    values = convert_number(series)
+    if not values.empty and values.max() <= 1:
+        values = values * 100
+    return values
 
 
 def percent(part: float, total: float) -> float:
@@ -134,16 +180,16 @@ def detect_auto_service_columns(df: pd.DataFrame) -> dict[str, str | None]:
         "atendimentos": find_column(df, ["Total Autosservico", "Total de Atendimentos", "Atendimentos", "Acionamentos"]),
         "csat_total": find_column(df, ["Teve avaliacao CSAT", "Avaliacoes CSAT", "CSAT total"]),
         "media_csat": find_column(df, ["Media CSAT"]),
-        "csat_pos_percent": find_column(df, ["%CSAT 4 ou 5", "% CSAT 4 ou 5"]),
-        "csat_pos": find_column(df, ["Teve nota CSAT 4 ou 5", "CSAT 4 ou 5", "CSAT Positivo"]),
-        "csat_neg_percent": find_column(df, ["%CSAT <= 3", "% CSAT <= 3"]),
-        "csat_neg": find_column(df, ["Teve nota CSAT <= 3", "CSAT <= 3", "CSAT Negativo"]),
+        "csat_pos_percent": find_column(df, ["%CSAT 4 ou 5", "% CSAT 4 ou 5"], prefer_percent=True),
+        "csat_pos": find_column(df, ["Teve nota CSAT 4 ou 5", "CSAT 4 ou 5", "CSAT Positivo"], allow_percent=False),
+        "csat_neg_percent": find_column(df, ["%CSAT <= 3", "% CSAT <= 3"], prefer_percent=True),
+        "csat_neg": find_column(df, ["Teve nota CSAT <= 3", "CSAT <= 3", "CSAT Negativo"], allow_percent=False),
         "os_geradas": find_column(df, ["OS geradas", "Ordens geradas"]),
-        "os_executadas": find_column(df, ["OS executadas", "Ordens executadas"]),
-        "perc_os_executadas": find_column(df, ["%OS executadas", "% OS executadas"]),
+        "os_executadas": find_column(df, ["OS executadas", "Ordens executadas"], allow_percent=False),
+        "perc_os_executadas": find_column(df, ["%OS executadas", "% OS executadas"], prefer_percent=True),
         "faturas_geradas": find_column(df, ["Faturas geradas", "Boletos gerados"]),
-        "faturas_pagas": find_column(df, ["Faturas pagas", "Boletos pagos"]),
-        "perc_faturas_pagas": find_column(df, ["%Faturas pagas", "% Faturas pagas"]),
+        "faturas_pagas": find_column(df, ["Faturas pagas", "Boletos pagos"], allow_percent=False),
+        "perc_faturas_pagas": find_column(df, ["%Faturas pagas", "% Faturas pagas"], prefer_percent=True),
         "boletos_isentos": find_column(df, ["Teve o boleto isento", "Boletos isentos", "Boleto isento", "Isentos"]),
         "valor_total": find_column(df, ["Valor total das faturas", "Valor Total Faturas", "Valor total", "Valor"]),
     }
@@ -163,15 +209,29 @@ def prepare_auto_service_base(df: pd.DataFrame, columns: dict[str, str | None]) 
         "boletos_isentos",
         "valor_total",
     ]
+    percent_keys = ["csat_pos_percent", "csat_neg_percent", "perc_os_executadas", "perc_faturas_pagas"]
     text_keys = ["mes", "departamento", "servico", "tipo", "canal"]
 
     for key in numeric_keys:
         column = columns.get(key)
         base[f"__{key}"] = convert_number(base[column]) if column and column in base.columns else 0
 
+    for key in percent_keys:
+        column = columns.get(key)
+        base[f"__{key}"] = convert_percent(base[column]) if column and column in base.columns else 0
+
     for key in text_keys:
         column = columns.get(key)
         base[f"__{key}"] = base[column].fillna("Nao informado").astype(str) if column and column in base.columns else "Nao informado"
+
+    if not columns.get("os_executadas") and columns.get("perc_os_executadas"):
+        base["__os_executadas"] = base["__os_geradas"] * (base["__perc_os_executadas"] / 100)
+    if not columns.get("faturas_pagas") and columns.get("perc_faturas_pagas"):
+        base["__faturas_pagas"] = base["__faturas_geradas"] * (base["__perc_faturas_pagas"] / 100)
+    if not columns.get("csat_pos") and columns.get("csat_pos_percent"):
+        base["__csat_pos"] = base["__csat_total"] * (base["__csat_pos_percent"] / 100)
+    if not columns.get("csat_neg") and columns.get("csat_neg_percent"):
+        base["__csat_neg"] = base["__csat_total"] * (base["__csat_neg_percent"] / 100)
 
     return base
 
