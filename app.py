@@ -7,11 +7,14 @@ import pandas as pd
 import streamlit as st
 
 from utils.analise_atendimento import (
+    LOW_VOLUME_MESSAGE,
+    LOW_VOLUME_THRESHOLD,
     analyze_month,
     automatic_conclusion,
     build_classification_dataframe,
     build_comparison_dataframe,
     build_fee_dataframe,
+    build_period_dataframe,
     build_status_dataframe,
     build_type_dataframe,
     detect_columns,
@@ -169,6 +172,7 @@ def _render_analysis(results: dict) -> None:
     analyses = results["analyses"]
     formatted_comparison = results["formatted_comparison"]
     formatted_fee = results["formatted_fee"]
+    formatted_period = results["formatted_period"]
     formatted_status = results["formatted_status"]
     formatted_type = results["formatted_type"]
     formatted_classification = results["formatted_classification"]
@@ -179,8 +183,13 @@ def _render_analysis(results: dict) -> None:
     st.markdown('<div class="section-title"></div>', unsafe_allow_html=True)
     st.subheader("Indicadores principais")
     _render_metrics(analyses)
+    for analysis in analyses:
+        if analysis.total_change < LOW_VOLUME_THRESHOLD:
+            st.warning(f"{analysis.month}: {LOW_VOLUME_MESSAGE}")
 
     st.subheader("Tabelas comparativas")
+    st.caption("Periodo e volume dos arquivos")
+    st.dataframe(formatted_period, use_container_width=True, hide_index=True)
     st.caption("Comparacao principal de TMA, TME e inatividade")
     st.dataframe(formatted_comparison, use_container_width=True, hide_index=True)
     st.caption("Status dos atendimentos")
@@ -189,7 +198,7 @@ def _render_analysis(results: dict) -> None:
     st.dataframe(formatted_type, use_container_width=True, hide_index=True)
     st.caption("Gargalo por classificacao")
     st.dataframe(formatted_classification, use_container_width=True, hide_index=True)
-    st.caption("Contagem de taxa")
+    st.caption("TMA, TME e Inatividade por Taxa")
     st.dataframe(formatted_fee, use_container_width=True, hide_index=True)
 
     st.subheader("Graficos comparativos")
@@ -208,6 +217,7 @@ def _render_analysis(results: dict) -> None:
                 pdf_bytes = generate_pdf(
                     output_path=output_path,
                     months=months,
+                    period_df=formatted_period,
                     comparison_df=formatted_comparison,
                     status_df=formatted_status,
                     type_df=formatted_type,
@@ -293,6 +303,7 @@ if analyze_clicked:
             analysis_2 = analyze_month(result_2.dataframe, month_2, **controls_2)
             analyses = [analysis_1, analysis_2]
             comparison_df = build_comparison_dataframe(analyses)
+            period_df = build_period_dataframe(analyses)
             fee_df = build_fee_dataframe(analyses)
             status_df = build_status_dataframe(analyses)
             type_df = build_type_dataframe(analyses)
@@ -301,11 +312,13 @@ if analyze_clicked:
             st.session_state["analysis_results"] = {
                 "analyses": analyses,
                 "comparison_df": comparison_df,
+                "period_df": period_df,
                 "fee_df": fee_df,
                 "status_df": status_df,
                 "type_df": type_df,
                 "classification_df": classification_df,
                 "formatted_comparison": format_comparison_dataframe(comparison_df),
+                "formatted_period": period_df,
                 "formatted_fee": format_fee_dataframe(fee_df),
                 "formatted_status": format_metric_dataframe(status_df),
                 "formatted_type": format_metric_dataframe(type_df),

@@ -10,7 +10,10 @@ import pandas as pd
 from .tratamento_tempo import duration_to_seconds, format_seconds
 
 
-UNKNOWN_FEE_GROUP = "Sem identificacao clara de taxa"
+LOW_VOLUME_THRESHOLD = 30
+LOW_VOLUME_MESSAGE = "Atencao: este mes possui baixo volume de atendimentos e pode nao representar o periodo completo."
+LOW_VOLUME_CONCLUSION = "A comparacao deve ser lida com cautela, pois um dos meses possui baixo volume de atendimentos."
+UNKNOWN_FEE_GROUP = "Sem identificacao clara"
 TAX_GROUPS = ("Com taxa", "Sem taxa", UNKNOWN_FEE_GROUP)
 
 TEXT_FIELD_KEYWORDS = (
@@ -99,6 +102,9 @@ COLUMN_CANDIDATES = {
 class MonthAnalysis:
     month: str
     period: str
+    period_start: str
+    period_end: str
+    period_days: int
     total_file: int
     total_change: int
     total_with_fee: int
@@ -113,6 +119,7 @@ class MonthAnalysis:
     median_without_inactivity_seconds: float
     max_tma_seconds: float
     comparison_row: dict[str, Any]
+    period_row: dict[str, Any]
     fee_rows: list[dict[str, Any]]
     status_rows: list[dict[str, Any]]
     type_rows: list[dict[str, Any]]
@@ -217,14 +224,14 @@ def is_change_request(text: str) -> bool:
     return any(term in normalized for term in CHANGE_TERMS)
 
 
-def is_inactivity_text(text: str) -> bool:
+def is_inactivity_status(text: str) -> bool:
     normalized = normalize_text(text)
-    return "finalizado por inatividade" in normalized or "inatividade" in normalized
+    return "finalizado por inatividade" in normalized
 
 
-def is_finished_text(text: str) -> bool:
+def is_real_finished_status(text: str) -> bool:
     normalized = normalize_text(text)
-    return any(term in normalized for term in ("finalizado", "concluido", "encerrado", "resolvido"))
+    return normalized == "finalizado"
 
 
 def _mean(series: pd.Series) -> float:
@@ -248,18 +255,23 @@ def _display_value(value: Any, fallback: str) -> str:
     return text
 
 
-def _period_from_dates(series: pd.Series | None) -> str:
+def _period_info(series: pd.Series | None) -> tuple[str, str, int, str]:
     if series is None or series.empty:
-        return "Nao identificado"
+        return "Nao identificado", "Nao identificado", 0, "Nao identificado"
     dates = pd.to_datetime(series, errors="coerce", dayfirst=True)
     dates = dates.dropna()
     if dates.empty:
-        return "Nao identificado"
+        return "Nao identificado", "Nao identificado", 0, "Nao identificado"
     start = dates.min()
     end = dates.max()
+    days = int((end.normalize() - start.normalize()).days) + 1
+    start_text = f"{start:%d/%m/%Y}"
+    end_text = f"{end:%d/%m/%Y}"
     if start.month == end.month and start.year == end.year:
-        return f"{start:%d/%m} a {end:%d/%m}"
-    return f"{start:%d/%m/%Y} a {end:%d/%m/%Y}"
+        period = f"{start:%d/%m} a {end:%d/%m}"
+    else:
+        period = f"{start:%d/%m/%Y} a {end:%d/%m/%Y}"
+    return start_text, end_text, days, period
 
 
 def _metric_rows(
@@ -297,8 +309,25 @@ def _fee_rows(df: pd.DataFrame, month: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     total = len(df)
     for group in TAX_GROUPS:
-        volume = int((df["_grupo_taxa"] == group).sum()) if total else 0
-        rows.append({"Mes": month, "Grupo": group, "Volume": volume, "%": _pct(volume, total)})
+        subset = df[df["_grupo_taxa"] == group]
+        volume = len(subset)
+        inactivity = int(subset["_inatividade"].sum()) if volume else 0
+        real_finished = int(subset["_finalizado_real"].sum()) if volume else 0
+        rows.append(
+            {
+                "Mes": month,
+                "Grupo": group,
+                "Volume": volume,
+                "TMA": _mean(subset["_tma_seconds"]),
+                "Mediana TMA": _median(subset["_tma_seconds"]),
+                "TME": _mean(subset["_tme_seconds"]),
+                "Mediana TME": _median(subset["_tme_seconds"]),
+                "Inatividade": inactivity,
+                "% Inatividade": _pct(inactivity, volume),
+                "Finalizados reais": real_finished,
+                "% Finalizacao real": _pct(real_finished, volume),
+            }
+        )
     return rows
 
 
@@ -344,10 +373,8 @@ def analyze_month(
     else:
         data["_tme_seconds"] = 0
 
-    data["_inatividade"] = (
-        data["_texto_status"].apply(is_inactivity_text) | data["_texto_analise"].apply(is_inactivity_text)
-    )
-    data["_finalizado"] = data["_texto_status"].apply(is_finished_text)
+    data["_inatividade"] = data["_texto_status"].apply(is_inactivity_status)
+    data["_finalizado_real"] = data["_texto_status"].apply(is_real_finished_status)
     data["_recorte_mudanca"] = data["_texto_analise"].apply(is_change_request)
     data["_grupo_taxa"] = data["_texto_analise"].apply(classify_fee)
 
@@ -356,12 +383,16 @@ def analyze_month(
     total_change = len(filtered)
     total_inactivity = int(filtered["_inatividade"].sum())
     no_inactivity = filtered[~filtered["_inatividade"]]
-    period = _period_from_dates(filtered[date_col] if has_date else None)
+    period_start, period_end, period_days, period = _period_info(filtered[date_col] if has_date else None)
+    real_finished_total = int(filtered["_finalizado_real"].sum()) if total_change else 0
 
     comparison_row = {
         "Mes": month,
-        "Total de atendimentos": total_change,
-        "Periodo": period,
+        "Data inicial": period_start,
+        "Data final": period_end,
+        "Dias analisados": period_days,
+        "Total atendimentos arquivo": total_file,
+        "Total no recorte": total_change,
         "TMA geral": _mean(filtered["_tma_seconds"]),
         "TME geral": _mean(filtered["_tme_seconds"]),
         "Mediana geral": _median(filtered["_tma_seconds"]),
@@ -370,13 +401,24 @@ def analyze_month(
         "Maior tempo": float(filtered["_tma_seconds"].max()) if total_change else 0.0,
         "Inatividade": total_inactivity,
         "% Inatividade": _pct(total_inactivity, total_change),
-        "Finalizados": int(filtered["_finalizado"].sum()) if total_change else 0,
-        "% Finalizacao": _pct(int(filtered["_finalizado"].sum()), total_change),
+        "Finalizados reais": real_finished_total,
+        "% Finalizacao real": _pct(real_finished_total, total_change),
+    }
+    period_row = {
+        "Mes": month,
+        "Data inicial": period_start,
+        "Data final": period_end,
+        "Dias analisados": period_days,
+        "Total atendimentos arquivo": total_file,
+        "Total no recorte Mudanca de Endereco + Mudanca de Comodo": total_change,
     }
 
     return MonthAnalysis(
         month=month,
         period=period,
+        period_start=period_start,
+        period_end=period_end,
+        period_days=period_days,
         total_file=total_file,
         total_change=total_change,
         total_with_fee=int((filtered["_grupo_taxa"] == "Com taxa").sum()) if total_change else 0,
@@ -391,6 +433,7 @@ def analyze_month(
         median_without_inactivity_seconds=comparison_row["Mediana sem inatividade"],
         max_tma_seconds=comparison_row["Maior tempo"],
         comparison_row=comparison_row,
+        period_row=period_row,
         fee_rows=_fee_rows(filtered, month),
         status_rows=_metric_rows(filtered, month, "_status_label", "Status", total_change),
         type_rows=_metric_rows(filtered, month, "_type_label", "Tipo", total_change),
@@ -401,6 +444,10 @@ def analyze_month(
 
 def build_comparison_dataframe(analyses: list[MonthAnalysis]) -> pd.DataFrame:
     return pd.DataFrame([analysis.comparison_row for analysis in analyses])
+
+
+def build_period_dataframe(analyses: list[MonthAnalysis]) -> pd.DataFrame:
+    return pd.DataFrame([analysis.period_row for analysis in analyses])
 
 
 def build_fee_dataframe(analyses: list[MonthAnalysis]) -> pd.DataFrame:
@@ -467,7 +514,7 @@ def format_comparison_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             "Maior tempo",
         ),
     )
-    return _format_percent_columns(formatted, ("% Inatividade", "% Finalizacao"))
+    return _format_percent_columns(formatted, ("% Inatividade", "% Finalizacao real"))
 
 
 def format_metric_dataframe(df: pd.DataFrame) -> pd.DataFrame:
@@ -476,7 +523,8 @@ def format_metric_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def format_fee_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    return _format_percent_columns(df, ("%",))
+    formatted = _format_duration_columns(df, ("TMA", "Mediana TMA", "TME", "Mediana TME"))
+    return _format_percent_columns(formatted, ("% Inatividade", "% Finalizacao real"))
 
 
 def format_summary_dataframe(df: pd.DataFrame) -> pd.DataFrame:
@@ -493,25 +541,28 @@ def automatic_conclusion(analyses: list[MonthAnalysis], status_df: pd.DataFrame,
 
     first, second = analyses
     messages: list[str] = []
+    has_low_volume = any(item.total_change < LOW_VOLUME_THRESHOLD for item in analyses)
 
-    higher_tma = first if first.general_tma_seconds >= second.general_tma_seconds else second
-    lower_tma = second if higher_tma is first else first
-    diff = abs(first.general_tma_seconds - second.general_tma_seconds)
-    messages.append(
-        f"{higher_tma.month} apresentou maior TMA geral ({format_seconds(higher_tma.general_tma_seconds)}), "
-        f"diferenca de {format_seconds(diff)} em relacao a {lower_tma.month}."
-    )
+    if has_low_volume:
+        messages.append(LOW_VOLUME_CONCLUSION)
+    else:
+        higher_tma = first if first.general_tma_seconds >= second.general_tma_seconds else second
+        lower_tma = second if higher_tma is first else first
+        diff = abs(first.general_tma_seconds - second.general_tma_seconds)
+        messages.append(
+            f"{higher_tma.month} apresentou maior TMA geral ({format_seconds(higher_tma.general_tma_seconds)}), "
+            f"diferenca de {format_seconds(diff)} em relacao a {lower_tma.month}."
+        )
 
-    if first.general_inactivity_pct or second.general_inactivity_pct:
+    if not has_low_volume and (first.general_inactivity_pct or second.general_inactivity_pct):
         higher_inactivity = first if first.general_inactivity_pct >= second.general_inactivity_pct else second
         messages.append(
             f"A maior inatividade ficou em {higher_inactivity.month}, com "
             f"{higher_inactivity.general_inactivity} casos ({higher_inactivity.general_inactivity_pct:.1f}%)."
         )
 
-    finalized = status_df[status_df["Status"].apply(normalize_text).str.contains("finalizado", regex=False)]
-    finalized = finalized[~finalized["Status"].apply(normalize_text).str.contains("inatividade", regex=False)]
-    if not finalized.empty:
+    finalized = status_df[status_df["Status"].apply(normalize_text).eq("finalizado")]
+    if not has_low_volume and not finalized.empty:
         best_finalized = finalized.sort_values("Mediana").iloc[0]
         messages.append(
             f"Quando o atendimento finaliza de fato, a melhor mediana esta em {best_finalized['Mes']} "

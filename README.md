@@ -9,7 +9,9 @@ Aplicativo web em Python com Streamlit para comparar dois relatorios CSV de aten
 - Permite ajuste manual das colunas quando a deteccao automatica nao for suficiente.
 - Filtra atendimentos de mudanca de endereco e mudanca de comodo como um unico grupo.
 - Calcula TMA/TME geral, mediana, TMA sem inatividade, status, tipo e gargalos por classificacao.
-- Conta separadamente `Com taxa`, `Sem taxa` e `Sem identificacao clara de taxa`.
+- Mostra periodo de cada arquivo, volume total e volume no recorte.
+- Calcula `TMA, TME e Inatividade por Taxa` sem tratar inatividade como finalizacao real.
+- Emite alerta quando um dos meses tem menos de 30 atendimentos no recorte.
 - Exibe cards, tabelas comparativas, graficos e conclusao automatica antes de gerar o PDF.
 - Gera relatorio PDF local e disponibiliza download pelo Streamlit.
 

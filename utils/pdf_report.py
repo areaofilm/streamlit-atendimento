@@ -58,6 +58,7 @@ def _figure_image(figure: Figure) -> Image | Paragraph:
 def generate_pdf(
     output_path: str | Path,
     months: tuple[str, str],
+    period_df: pd.DataFrame,
     comparison_df: pd.DataFrame,
     status_df: pd.DataFrame,
     type_df: pd.DataFrame,
@@ -104,6 +105,9 @@ def generate_pdf(
         Spacer(1, 0.2 * cm),
         Paragraph(f"Periodo: {months[0]} x {months[1]}", subtitle),
         PageBreak(),
+        Paragraph("Periodo e volume dos arquivos", styles["Heading2"]),
+        _dataframe_table(period_df, font_size=7),
+        Spacer(1, 0.5 * cm),
         Paragraph("Comparacao principal", styles["Heading2"]),
         _dataframe_table(comparison_df, font_size=6),
         Spacer(1, 0.5 * cm),
@@ -116,8 +120,8 @@ def generate_pdf(
         Paragraph("Gargalo por classificacao", styles["Heading2"]),
         _dataframe_table(classification_df, font_size=6),
         Spacer(1, 0.5 * cm),
-        Paragraph("Contagem de taxa", styles["Heading2"]),
-        _dataframe_table(fee_df, font_size=7),
+        Paragraph("TMA, TME e Inatividade por Taxa", styles["Heading2"]),
+        _dataframe_table(fee_df, font_size=6),
         PageBreak(),
     ]
 
