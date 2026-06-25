@@ -17,12 +17,12 @@ from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, S
 LOGO_PATH = Path(__file__).resolve().parents[1] / "assets" / "valenet_logo.png"
 
 
-def _table(df: pd.DataFrame, font_size: int = 6, max_rows: int | None = None) -> Table:
+def _table(df: pd.DataFrame, font_size: int = 7, max_rows: int | None = None, col_widths: list[float] | None = None) -> Table:
     if df.empty and len(df.columns) == 0:
         df = pd.DataFrame([{"Aviso": "Sem dados disponiveis para esta secao."}])
     shown = df.head(max_rows) if max_rows else df
     data = [list(shown.columns)] + shown.astype(str).values.tolist()
-    table = Table(data, repeatRows=1)
+    table = Table(data, repeatRows=1, colWidths=col_widths)
     table.setStyle(
         TableStyle(
             [
@@ -35,10 +35,41 @@ def _table(df: pd.DataFrame, font_size: int = 6, max_rows: int | None = None) ->
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                 ("LEFTPADDING", (0, 0), (-1, -1), 3),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
             ]
         )
     )
     return table
+
+
+def _compact_metric_table(df: pd.DataFrame, label_col: str) -> pd.DataFrame:
+    columns = [
+        label_col,
+        "Atendimentos",
+        "% volume",
+        "OS_executadas",
+        "% OS executadas",
+        "Faturas_pagas",
+        "% Faturas pagas",
+        "Avaliacoes_CSAT",
+        "% CSAT positivo",
+    ]
+    available = [column for column in columns if column in df.columns]
+    compact = df[available].copy() if available else df.copy()
+    return compact.rename(
+        columns={
+            label_col: label_col,
+            "Atendimentos": "Atend.",
+            "% volume": "% Vol.",
+            "OS_executadas": "OS exec.",
+            "% OS executadas": "% OS exec.",
+            "Faturas_pagas": "Fat. pagas",
+            "% Faturas pagas": "% Fat. pagas",
+            "Avaliacoes_CSAT": "Aval. CSAT",
+            "% CSAT positivo": "% CSAT +",
+        }
+    )
 
 
 def _footer(canvas, _doc) -> None:
@@ -131,16 +162,16 @@ def generate_auto_service_pdf(
             *_paragraph_list(diagnostic, body),
             PageBreak(),
             Paragraph("Mudanca de endereco x mudanca de comodo", styles["Heading2"]),
-            _table(service_df, font_size=5, max_rows=25),
+            _table(_compact_metric_table(service_df, "Servico"), font_size=7.5, max_rows=25, col_widths=[5.8 * cm, 2.0 * cm, 1.8 * cm, 2.0 * cm, 2.1 * cm, 2.0 * cm, 2.3 * cm, 2.0 * cm, 2.0 * cm]),
             Spacer(1, 0.5 * cm),
             Paragraph("Autosservico x atendimento humano", styles["Heading2"]),
-            _table(type_df, font_size=5, max_rows=25),
+            _table(_compact_metric_table(type_df, "Tipo"), font_size=7.5, max_rows=25, col_widths=[5.8 * cm, 2.0 * cm, 1.8 * cm, 2.0 * cm, 2.1 * cm, 2.0 * cm, 2.3 * cm, 2.0 * cm, 2.0 * cm]),
             PageBreak(),
             Paragraph("App Minha Valenet x WhatsApp", styles["Heading2"]),
-            _table(channel_df, font_size=5, max_rows=25),
+            _table(_compact_metric_table(channel_df, "Canal"), font_size=7.5, max_rows=25, col_widths=[5.8 * cm, 2.0 * cm, 1.8 * cm, 2.0 * cm, 2.1 * cm, 2.0 * cm, 2.3 * cm, 2.0 * cm, 2.0 * cm]),
             Spacer(1, 0.5 * cm),
             Paragraph("Analise por departamento/equipe", styles["Heading2"]),
-            _table(department_df, font_size=5, max_rows=30),
+            _table(_compact_metric_table(department_df, "Departamento"), font_size=7.2, max_rows=30, col_widths=[5.8 * cm, 2.0 * cm, 1.8 * cm, 2.0 * cm, 2.1 * cm, 2.0 * cm, 2.3 * cm, 2.0 * cm, 2.0 * cm]),
             PageBreak(),
             Paragraph("Principais gargalos", styles["Heading2"]),
             *_paragraph_list(bottlenecks, body),
