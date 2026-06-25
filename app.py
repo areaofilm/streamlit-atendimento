@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 
 import pandas as pd
@@ -9,16 +10,23 @@ import streamlit as st
 from utils.analise_atendimento import (
     LOW_VOLUME_MESSAGE,
     LOW_VOLUME_THRESHOLD,
+    FILTER_ALL,
+    FILTER_CHANGE,
+    FILTER_CUSTOM,
     analyze_month,
     automatic_conclusion,
+    build_bottleneck_dataframe,
     build_classification_dataframe,
     build_comparison_dataframe,
+    build_executive_summary,
     build_fee_dataframe,
     build_period_dataframe,
     build_status_dataframe,
     build_type_dataframe,
+    comparison_reliability,
     detect_columns,
     format_comparison_dataframe,
+    format_bottleneck_dataframe,
     format_fee_dataframe,
     format_metric_dataframe,
     textual_columns_warning,
@@ -55,6 +63,18 @@ st.markdown(
         padding-top: .75rem;
         border-top: 1px solid #e5e7eb;
     }
+    .health-card {
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 14px 16px;
+        background: #f8fafc;
+        min-height: 108px;
+    }
+    .health-green { border-left: 7px solid #16a34a; }
+    .health-yellow { border-left: 7px solid #f59e0b; }
+    .health-red { border-left: 7px solid #dc2626; }
+    .health-card small { color: #475467; }
+    .health-card strong { font-size: 1rem; color: #111827; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -77,6 +97,71 @@ def _select_index(options: list[str], selected: str | None) -> int:
     if selected and selected in options:
         return options.index(selected)
     return 0
+
+
+def _parse_terms(text: str) -> list[str]:
+    terms: list[str] = []
+    for line in text.replace(";", "\n").replace(",", "\n").splitlines():
+        clean = line.strip()
+        if clean:
+            terms.append(clean)
+    return terms
+
+
+def _traffic_color(kind: str, value: float | int | str) -> str:
+    if kind == "inactivity":
+        return "red" if float(value) >= 30 else "yellow" if float(value) >= 15 else "green"
+    if kind == "finalization":
+        return "red" if float(value) < 60 else "yellow" if float(value) < 80 else "green"
+    if kind == "volume":
+        return "red" if int(value) < 30 else "yellow" if int(value) < 50 else "green"
+    if kind == "reliability":
+        return "green" if value == "Comparacao confiavel" else "yellow" if value == "Comparacao parcial" else "red"
+    return "green"
+
+
+def _health_card(title: str, value: str, detail: str, color: str) -> str:
+    return (
+        f'<div class="health-card health-{color}">'
+        f"<small>{title}</small><br><strong>{value}</strong><br><small>{detail}</small>"
+        "</div>"
+    )
+
+
+def _build_excel_bytes(results: dict) -> bytes:
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        results["executive_df"].to_excel(writer, sheet_name="Resumo Executivo", index=False)
+        results["period_df"].to_excel(writer, sheet_name="Periodo", index=False)
+        results["comparison_df"].to_excel(writer, sheet_name="Comparacao", index=False)
+        results["status_df"].to_excel(writer, sheet_name="Status", index=False)
+        results["type_df"].to_excel(writer, sheet_name="Tipo", index=False)
+        results["classification_df"].to_excel(writer, sheet_name="Classificacao", index=False)
+        results["fee_df"].to_excel(writer, sheet_name="Taxa", index=False)
+        results["bottleneck_df"].to_excel(writer, sheet_name="Top Gargalos", index=False)
+        filtered_base = _filtered_base_dataframe(results["analyses"])
+        if not filtered_base.empty:
+            filtered_base.to_excel(writer, sheet_name="Base Filtrada", index=False)
+    return output.getvalue()
+
+
+def _filtered_base_dataframe(analyses) -> pd.DataFrame:
+    base_rows = []
+    audit_cols = {
+        "_grupo_taxa": "Grupo taxa",
+        "_inatividade": "Inatividade",
+        "_finalizado_real": "Finalizado real",
+        "_tma_seconds": "TMA segundos",
+        "_tme_seconds": "TME segundos",
+    }
+    for analysis in analyses:
+        data = analysis.filtered_data.copy()
+        original_cols = [col for col in data.columns if not str(col).startswith("_")]
+        keep_cols = original_cols + [col for col in audit_cols if col in data.columns]
+        exported = data[keep_cols].rename(columns=audit_cols)
+        exported.insert(0, "Mes analisado", analysis.month)
+        base_rows.append(exported)
+    return pd.concat(base_rows, ignore_index=True) if base_rows else pd.DataFrame()
 
 
 def _column_controls(df: pd.DataFrame, detected: dict, key_prefix: str) -> dict:
@@ -170,12 +255,15 @@ def _render_metrics(analyses) -> None:
 
 def _render_analysis(results: dict) -> None:
     analyses = results["analyses"]
+    executive_df = results["executive_df"]
+    bottleneck_df = results["bottleneck_df"]
     formatted_comparison = results["formatted_comparison"]
     formatted_fee = results["formatted_fee"]
     formatted_period = results["formatted_period"]
     formatted_status = results["formatted_status"]
     formatted_type = results["formatted_type"]
     formatted_classification = results["formatted_classification"]
+    formatted_bottleneck = results["formatted_bottleneck"]
     figures = results["figures"]
     conclusion = results["conclusion"]
     months = results["months"]
@@ -187,23 +275,78 @@ def _render_analysis(results: dict) -> None:
         if analysis.total_change < LOW_VOLUME_THRESHOLD:
             st.warning(f"{analysis.month}: {LOW_VOLUME_MESSAGE}")
 
-    st.subheader("Tabelas comparativas")
-    st.caption("Periodo e volume dos arquivos")
-    st.dataframe(formatted_period, use_container_width=True, hide_index=True)
-    st.caption("Comparacao principal de TMA, TME e inatividade")
-    st.dataframe(formatted_comparison, use_container_width=True, hide_index=True)
-    st.caption("Status dos atendimentos")
-    st.dataframe(formatted_status, use_container_width=True, hide_index=True)
-    st.caption("Tipo de atendimento")
-    st.dataframe(formatted_type, use_container_width=True, hide_index=True)
-    st.caption("Gargalo por classificacao")
-    st.dataframe(formatted_classification, use_container_width=True, hide_index=True)
-    st.caption("TMA, TME e Inatividade por Taxa")
-    st.dataframe(formatted_fee, use_container_width=True, hide_index=True)
+    st.subheader("Diagnostico executivo")
+    reliability, reliability_reason = comparison_reliability(analyses)
+    card_cols = st.columns(4)
+    total_volume = min(item.total_change for item in analyses) if analyses else 0
+    max_inactivity = max((item.general_inactivity_pct for item in analyses), default=0)
+    max_finalization = max(
+        (
+            row.get("% Finalizacao real", 0)
+            for row in results["comparison_df"].to_dict("records")
+        ),
+        default=0,
+    )
+    card_cols[0].markdown(
+        _health_card("Confiabilidade", reliability, reliability_reason, _traffic_color("reliability", reliability)),
+        unsafe_allow_html=True,
+    )
+    card_cols[1].markdown(
+        _health_card("Menor volume", str(total_volume), "Atendimentos no menor mes", _traffic_color("volume", total_volume)),
+        unsafe_allow_html=True,
+    )
+    card_cols[2].markdown(
+        _health_card("Pior inatividade", f"{max_inactivity:.1f}%", "Maior percentual entre os meses", _traffic_color("inactivity", max_inactivity)),
+        unsafe_allow_html=True,
+    )
+    card_cols[3].markdown(
+        _health_card("Melhor finalizacao real", f"{max_finalization:.1f}%", "Status exatamente Finalizado", _traffic_color("finalization", max_finalization)),
+        unsafe_allow_html=True,
+    )
+    st.dataframe(executive_df, use_container_width=True, hide_index=True)
 
     st.subheader("Graficos comparativos")
     for title, figure in figures:
         st.plotly_chart(figure, use_container_width=True)
+
+    st.subheader("Tabelas e auditoria")
+    tab_summary, tab_tax, tab_bottlenecks, tab_data, tab_downloads = st.tabs(
+        ["Resumo", "Taxa", "Top Gargalos", "Dados filtrados", "Downloads"]
+    )
+    with tab_summary:
+        st.caption("Periodo e volume dos arquivos")
+        st.dataframe(formatted_period, use_container_width=True, hide_index=True)
+        st.caption("Comparacao principal de TMA, TME e inatividade")
+        st.dataframe(formatted_comparison, use_container_width=True, hide_index=True)
+        st.caption("Status dos atendimentos")
+        st.dataframe(formatted_status, use_container_width=True, hide_index=True)
+        st.caption("Tipo de atendimento")
+        st.dataframe(formatted_type, use_container_width=True, hide_index=True)
+        st.caption("Gargalo por classificacao")
+        st.dataframe(formatted_classification, use_container_width=True, hide_index=True)
+    with tab_tax:
+        st.caption("TMA, TME e Inatividade por Taxa")
+        st.dataframe(formatted_fee, use_container_width=True, hide_index=True)
+    with tab_bottlenecks:
+        st.caption("Top gargalos ordenados por inatividade e impacto estimado")
+        st.dataframe(formatted_bottleneck, use_container_width=True, hide_index=True)
+    with tab_data:
+        filtered_base = _filtered_base_dataframe(analyses)
+        st.dataframe(filtered_base, use_container_width=True, hide_index=True)
+        st.download_button(
+            "Baixar base filtrada em CSV",
+            data=filtered_base.to_csv(index=False).encode("utf-8-sig"),
+            file_name="base_filtrada_atendimentos.csv",
+            mime="text/csv",
+        )
+    with tab_downloads:
+        excel_bytes = _build_excel_bytes(results)
+        st.download_button(
+            "Baixar Excel da analise",
+            data=excel_bytes,
+            file_name="analise_atendimento.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
     st.subheader("Conclusao automatica")
     st.info(conclusion)
@@ -217,12 +360,14 @@ def _render_analysis(results: dict) -> None:
                 pdf_bytes = generate_pdf(
                     output_path=output_path,
                     months=months,
+                    executive_df=executive_df,
                     period_df=formatted_period,
                     comparison_df=formatted_comparison,
                     status_df=formatted_status,
                     type_df=formatted_type,
                     classification_df=formatted_classification,
                     fee_df=formatted_fee,
+                    bottleneck_df=formatted_bottleneck,
                     figures=figures,
                     conclusion=conclusion,
                 )
@@ -244,6 +389,35 @@ def _render_analysis(results: dict) -> None:
 
 st.title("Analise comparativa de relatorios CSV de atendimento")
 st.caption("Mudanca de Endereco + Mudanca de Comodo | TMA, TME, status, classificacao e contagem de taxa")
+
+st.sidebar.header("Regras da analise")
+filter_label = st.sidebar.radio(
+    "Recorte analisado",
+    ["Mudanca de Endereco + Mudanca de Comodo", "Arquivo inteiro", "Busca personalizada"],
+)
+filter_mode = {
+    "Mudanca de Endereco + Mudanca de Comodo": FILTER_CHANGE,
+    "Arquivo inteiro": FILTER_ALL,
+    "Busca personalizada": FILTER_CUSTOM,
+}[filter_label]
+custom_filter_text = st.sidebar.text_area(
+    "Termos da busca personalizada",
+    value="",
+    help="Use um termo por linha. Exemplo: cancelamento, renovacao, agendamento.",
+)
+with_fee_text = st.sidebar.text_area(
+    "Termos extras para Com taxa",
+    value="",
+    help="Opcional. Use um termo por linha quando houver marcacoes especificas no seu CSV.",
+)
+without_fee_text = st.sidebar.text_area(
+    "Termos extras para Sem taxa",
+    value="",
+    help="Opcional. Use um termo por linha quando houver marcacoes especificas no seu CSV.",
+)
+filter_terms = _parse_terms(custom_filter_text)
+with_fee_terms = _parse_terms(with_fee_text)
+without_fee_terms = _parse_terms(without_fee_text)
 
 left, right = st.columns(2)
 with left:
@@ -299,8 +473,27 @@ if analyze_clicked:
         st.error("Selecione a coluna de tempo de atendimento (TMA) para os dois meses.")
     else:
         try:
-            analysis_1 = analyze_month(result_1.dataframe, month_1, **controls_1)
-            analysis_2 = analyze_month(result_2.dataframe, month_2, **controls_2)
+            if filter_mode == FILTER_CUSTOM and not filter_terms:
+                st.error("Informe pelo menos um termo para usar a busca personalizada.")
+                st.stop()
+            analysis_1 = analyze_month(
+                result_1.dataframe,
+                month_1,
+                **controls_1,
+                filter_mode=filter_mode,
+                filter_terms=filter_terms,
+                with_fee_terms=with_fee_terms,
+                without_fee_terms=without_fee_terms,
+            )
+            analysis_2 = analyze_month(
+                result_2.dataframe,
+                month_2,
+                **controls_2,
+                filter_mode=filter_mode,
+                filter_terms=filter_terms,
+                with_fee_terms=with_fee_terms,
+                without_fee_terms=without_fee_terms,
+            )
             analyses = [analysis_1, analysis_2]
             comparison_df = build_comparison_dataframe(analyses)
             period_df = build_period_dataframe(analyses)
@@ -308,9 +501,13 @@ if analyze_clicked:
             status_df = build_status_dataframe(analyses)
             type_df = build_type_dataframe(analyses)
             classification_df = build_classification_dataframe(analyses)
+            bottleneck_df = build_bottleneck_dataframe(classification_df)
+            executive_df = build_executive_summary(analyses, status_df, classification_df)
             figures = create_figures(comparison_df, status_df, type_df, classification_df, fee_df)
             st.session_state["analysis_results"] = {
                 "analyses": analyses,
+                "executive_df": executive_df,
+                "bottleneck_df": bottleneck_df,
                 "comparison_df": comparison_df,
                 "period_df": period_df,
                 "fee_df": fee_df,
@@ -323,6 +520,7 @@ if analyze_clicked:
                 "formatted_status": format_metric_dataframe(status_df),
                 "formatted_type": format_metric_dataframe(type_df),
                 "formatted_classification": format_metric_dataframe(classification_df),
+                "formatted_bottleneck": format_bottleneck_dataframe(bottleneck_df),
                 "figures": figures,
                 "conclusion": automatic_conclusion(analyses, status_df, classification_df),
                 "months": (month_1, month_2),

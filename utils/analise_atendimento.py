@@ -46,6 +46,10 @@ CHANGE_TERMS = (
     "mudanca comodo",
 )
 
+FILTER_CHANGE = "change"
+FILTER_ALL = "all"
+FILTER_CUSTOM = "custom"
+
 WITHOUT_FEE_PATTERNS = (
     r"\bsem\s+(?:taxa|cobranca|custo)\b",
     r"\bs[/ ]?taxa\b",
@@ -199,10 +203,18 @@ def _row_text(row: pd.Series, columns: list[str]) -> str:
     return " | ".join(value for value in values if value)
 
 
-def classify_fee(text: str) -> str:
+def classify_fee(
+    text: str,
+    with_fee_terms: list[str] | tuple[str, ...] | None = None,
+    without_fee_terms: list[str] | tuple[str, ...] | None = None,
+) -> str:
     normalized = normalize_text(text)
+    if any(term in normalized for term in _normalized_terms(without_fee_terms)):
+        return "Sem taxa"
     if any(re.search(pattern, normalized) for pattern in WITHOUT_FEE_PATTERNS):
         return "Sem taxa"
+    if any(term in normalized for term in _normalized_terms(with_fee_terms)):
+        return "Com taxa"
     if any(re.search(pattern, normalized) for pattern in WITH_FEE_PATTERNS):
         return "Com taxa"
     if _has_generic_fee_context(normalized):
@@ -219,9 +231,14 @@ def _has_generic_fee_context(text: str) -> bool:
     return any(term in window for term in context_terms)
 
 
-def is_change_request(text: str) -> bool:
+def _normalized_terms(terms: list[str] | tuple[str, ...] | None) -> list[str]:
+    return [normalize_text(term) for term in (terms or []) if normalize_text(term)]
+
+
+def is_change_request(text: str, terms: list[str] | tuple[str, ...] | None = None) -> bool:
     normalized = normalize_text(text)
-    return any(term in normalized for term in CHANGE_TERMS)
+    search_terms = _normalized_terms(terms or CHANGE_TERMS)
+    return any(term in normalized for term in search_terms)
 
 
 def is_inactivity_status(text: str) -> bool:
@@ -289,6 +306,7 @@ def _metric_rows(
     for label, subset in grouped:
         volume = len(subset)
         inactivity = int(subset["_inatividade"].sum())
+        real_finished = int(subset["_finalizado_real"].sum())
         rows.append(
             {
                 "Mes": month,
@@ -299,6 +317,8 @@ def _metric_rows(
                 "Mediana": _median(subset["_tma_seconds"]),
                 "Inatividade": inactivity,
                 "% Inatividade": _pct(inactivity, volume),
+                "Finalizados reais": real_finished,
+                "% Finalizacao real": _pct(real_finished, volume),
             }
         )
     rows.sort(key=lambda item: (item["Inatividade"], item["Media"], item["Volume"]), reverse=True)
@@ -331,6 +351,13 @@ def _fee_rows(df: pd.DataFrame, month: str) -> list[dict[str, Any]]:
     return rows
 
 
+def _recorte_mask(data: pd.DataFrame, filter_mode: str, filter_terms: list[str] | None) -> pd.Series:
+    if filter_mode == FILTER_ALL:
+        return pd.Series(True, index=data.index)
+    terms = filter_terms if filter_mode == FILTER_CUSTOM else list(CHANGE_TERMS)
+    return data["_texto_analise"].apply(lambda text: is_change_request(text, terms))
+
+
 def analyze_month(
     df: pd.DataFrame,
     month: str,
@@ -341,6 +368,10 @@ def analyze_month(
     type_col: str | None = None,
     classification_col: str | None = None,
     date_col: str | None = None,
+    filter_mode: str = FILTER_CHANGE,
+    filter_terms: list[str] | None = None,
+    with_fee_terms: list[str] | None = None,
+    without_fee_terms: list[str] | None = None,
 ) -> MonthAnalysis:
     if not attendance_time_col:
         raise ValueError("Selecione a coluna de tempo de atendimento.")
@@ -375,15 +406,17 @@ def analyze_month(
 
     data["_inatividade"] = data["_texto_status"].apply(is_inactivity_status)
     data["_finalizado_real"] = data["_texto_status"].apply(is_real_finished_status)
-    data["_recorte_mudanca"] = data["_texto_analise"].apply(is_change_request)
-    data["_grupo_taxa"] = data["_texto_analise"].apply(classify_fee)
+    data["_recorte_mudanca"] = _recorte_mask(data, filter_mode, filter_terms)
+    data["_grupo_taxa"] = data["_texto_analise"].apply(
+        lambda text: classify_fee(text, with_fee_terms=with_fee_terms, without_fee_terms=without_fee_terms)
+    )
 
     filtered = data[data["_recorte_mudanca"]].copy()
     total_file = len(data)
     total_change = len(filtered)
     total_inactivity = int(filtered["_inatividade"].sum())
     no_inactivity = filtered[~filtered["_inatividade"]]
-    period_start, period_end, period_days, period = _period_info(filtered[date_col] if has_date else None)
+    period_start, period_end, period_days, period = _period_info(data[date_col] if has_date else None)
     real_finished_total = int(filtered["_finalizado_real"].sum()) if total_change else 0
 
     comparison_row = {
@@ -478,6 +511,90 @@ def build_classification_dataframe(analyses: list[MonthAnalysis]) -> pd.DataFram
     return pd.DataFrame(rows)
 
 
+def build_bottleneck_dataframe(classification_df: pd.DataFrame) -> pd.DataFrame:
+    if classification_df.empty:
+        return pd.DataFrame(
+            columns=[
+                "Mes",
+                "Classificacao",
+                "Volume",
+                "Inatividade",
+                "% Inatividade",
+                "TMA",
+                "Impacto estimado",
+            ]
+        )
+    data = classification_df.copy()
+    data["Impacto estimado"] = data["Inatividade"] * data["Media"]
+    data = data.sort_values(["Inatividade", "% Inatividade", "Impacto estimado", "Volume"], ascending=False)
+    return data[["Mes", "Classificacao", "Volume", "Inatividade", "% Inatividade", "Media", "Impacto estimado"]].rename(
+        columns={"Media": "TMA"}
+    )
+
+
+def comparison_reliability(analyses: list[MonthAnalysis]) -> tuple[str, str]:
+    if any(item.total_change < LOW_VOLUME_THRESHOLD for item in analyses):
+        return "Comparacao nao recomendada", "Um dos meses tem menos de 30 atendimentos no recorte."
+    volumes = [item.total_change for item in analyses if item.total_change]
+    days = [item.period_days for item in analyses if item.period_days]
+    if len(volumes) == 2 and min(volumes) / max(volumes) < 0.5:
+        return "Comparacao parcial", "Os volumes entre os meses estao muito diferentes."
+    if len(days) == 2 and min(days) / max(days) < 0.5:
+        return "Comparacao parcial", "A quantidade de dias analisados esta muito diferente."
+    return "Comparacao confiavel", "Volumes e periodos estao minimamente comparaveis."
+
+
+def build_executive_summary(
+    analyses: list[MonthAnalysis],
+    status_df: pd.DataFrame,
+    classification_df: pd.DataFrame,
+) -> pd.DataFrame:
+    reliability, reliability_reason = comparison_reliability(analyses)
+    rows = [{"Item": "Confiabilidade", "Leitura": reliability, "Detalhe": reliability_reason}]
+
+    if analyses:
+        highest_inactivity = max(analyses, key=lambda item: item.general_inactivity_pct)
+        rows.append(
+            {
+                "Item": "Maior inatividade",
+                "Leitura": highest_inactivity.month,
+                "Detalhe": f"{highest_inactivity.general_inactivity} casos ({highest_inactivity.general_inactivity_pct:.1f}%)",
+            }
+        )
+
+    if not classification_df.empty:
+        bottleneck = classification_df.sort_values(["Inatividade", "% Inatividade", "Media"], ascending=False).iloc[0]
+        rows.append(
+            {
+                "Item": "Principal gargalo",
+                "Leitura": f"{bottleneck['Mes']} - {bottleneck['Classificacao']}",
+                "Detalhe": f"{int(bottleneck['Inatividade'])} inatividades; TMA {format_seconds(bottleneck['Media'])}",
+            }
+        )
+
+    finalized = status_df[status_df["Status"].apply(normalize_text).eq("finalizado")]
+    if not finalized.empty:
+        fastest_finished = finalized.sort_values("Mediana").iloc[0]
+        rows.append(
+            {
+                "Item": "Finalizacao real",
+                "Leitura": fastest_finished["Mes"],
+                "Detalhe": f"Mediana dos finalizados reais: {format_seconds(fastest_finished['Mediana'])}",
+            }
+        )
+
+    unknown_fee_total = sum(item.total_unknown_fee for item in analyses)
+    rows.append(
+        {
+            "Item": "Marcacao de taxa",
+            "Leitura": f"{unknown_fee_total} sem identificacao clara",
+            "Detalhe": "Use a tabela por taxa para auditar cobranca sem misturar com o diagnostico de TMA.",
+        }
+    )
+
+    return pd.DataFrame(rows)
+
+
 def build_summary_dataframe(analyses: list[MonthAnalysis]) -> pd.DataFrame:
     return build_comparison_dataframe(analyses)
 
@@ -527,6 +644,11 @@ def format_fee_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return _format_percent_columns(formatted, ("% Inatividade", "% Finalizacao real"))
 
 
+def format_bottleneck_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    formatted = _format_duration_columns(df, ("TMA", "Impacto estimado"))
+    return _format_percent_columns(formatted, ("% Inatividade",))
+
+
 def format_summary_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return format_comparison_dataframe(df)
 
@@ -541,10 +663,14 @@ def automatic_conclusion(analyses: list[MonthAnalysis], status_df: pd.DataFrame,
 
     first, second = analyses
     messages: list[str] = []
+    reliability, _reason = comparison_reliability(analyses)
     has_low_volume = any(item.total_change < LOW_VOLUME_THRESHOLD for item in analyses)
+    is_unbalanced = reliability != "Comparacao confiavel"
 
     if has_low_volume:
         messages.append(LOW_VOLUME_CONCLUSION)
+    elif is_unbalanced:
+        messages.append("A comparacao deve ser lida com cautela, pois as bases analisadas estao desbalanceadas.")
     else:
         higher_tma = first if first.general_tma_seconds >= second.general_tma_seconds else second
         lower_tma = second if higher_tma is first else first
@@ -554,7 +680,7 @@ def automatic_conclusion(analyses: list[MonthAnalysis], status_df: pd.DataFrame,
             f"diferenca de {format_seconds(diff)} em relacao a {lower_tma.month}."
         )
 
-    if not has_low_volume and (first.general_inactivity_pct or second.general_inactivity_pct):
+    if not is_unbalanced and (first.general_inactivity_pct or second.general_inactivity_pct):
         higher_inactivity = first if first.general_inactivity_pct >= second.general_inactivity_pct else second
         messages.append(
             f"A maior inatividade ficou em {higher_inactivity.month}, com "
@@ -562,7 +688,7 @@ def automatic_conclusion(analyses: list[MonthAnalysis], status_df: pd.DataFrame,
         )
 
     finalized = status_df[status_df["Status"].apply(normalize_text).eq("finalizado")]
-    if not has_low_volume and not finalized.empty:
+    if not is_unbalanced and not finalized.empty:
         best_finalized = finalized.sort_values("Mediana").iloc[0]
         messages.append(
             f"Quando o atendimento finaliza de fato, a melhor mediana esta em {best_finalized['Mes']} "

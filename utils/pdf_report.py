@@ -58,12 +58,14 @@ def _figure_image(figure: Figure) -> Image | Paragraph:
 def generate_pdf(
     output_path: str | Path,
     months: tuple[str, str],
+    executive_df: pd.DataFrame,
     period_df: pd.DataFrame,
     comparison_df: pd.DataFrame,
     status_df: pd.DataFrame,
     type_df: pd.DataFrame,
     classification_df: pd.DataFrame,
     fee_df: pd.DataFrame,
+    bottleneck_df: pd.DataFrame,
     figures: list[tuple[str, Figure]],
     conclusion: str,
 ) -> bytes:
@@ -105,6 +107,25 @@ def generate_pdf(
         Spacer(1, 0.2 * cm),
         Paragraph(f"Periodo: {months[0]} x {months[1]}", subtitle),
         PageBreak(),
+        Paragraph("Resumo executivo", styles["Heading2"]),
+        _dataframe_table(executive_df, font_size=8),
+        Spacer(1, 0.5 * cm),
+        Paragraph("Conclusao automatica", styles["Heading2"]),
+        Paragraph(conclusion, styles["BodyText"]),
+        PageBreak(),
+    ]
+
+    for index, (title_text, figure) in enumerate(figures[:4], start=1):
+        story.append(Paragraph(title_text, styles["Heading2"]))
+        story.append(_figure_image(figure))
+        if index % 2 == 0 and index != min(4, len(figures)):
+            story.append(PageBreak())
+        else:
+            story.append(Spacer(1, 0.4 * cm))
+
+    story.extend(
+        [
+        PageBreak(),
         Paragraph("Periodo e volume dos arquivos", styles["Heading2"]),
         _dataframe_table(period_df, font_size=7),
         Spacer(1, 0.5 * cm),
@@ -117,29 +138,26 @@ def generate_pdf(
         Paragraph("Tipo de atendimento", styles["Heading2"]),
         _dataframe_table(type_df, font_size=7),
         PageBreak(),
-        Paragraph("Gargalo por classificacao", styles["Heading2"]),
-        _dataframe_table(classification_df, font_size=6),
+        Paragraph("Top Gargalos", styles["Heading2"]),
+        _dataframe_table(bottleneck_df, font_size=6),
         Spacer(1, 0.5 * cm),
         Paragraph("TMA, TME e Inatividade por Taxa", styles["Heading2"]),
         _dataframe_table(fee_df, font_size=6),
+        Spacer(1, 0.5 * cm),
+        Paragraph("Gargalo por classificacao", styles["Heading2"]),
+        _dataframe_table(classification_df, font_size=6),
         PageBreak(),
-    ]
+        ]
+    )
 
-    for index, (title_text, figure) in enumerate(figures, start=1):
+    remaining_figures = figures[4:]
+    for index, (title_text, figure) in enumerate(remaining_figures, start=1):
         story.append(Paragraph(title_text, styles["Heading2"]))
         story.append(_figure_image(figure))
-        if index % 2 == 0 and index != len(figures):
+        if index % 2 == 0 and index != len(remaining_figures):
             story.append(PageBreak())
         else:
             story.append(Spacer(1, 0.4 * cm))
-
-    story.extend(
-        [
-            PageBreak(),
-            Paragraph("Conclusao automatica", styles["Heading2"]),
-            Paragraph(conclusion, styles["BodyText"]),
-        ]
-    )
 
     doc.build(story, onFirstPage=_footer, onLaterPages=_footer)
     pdf_bytes = buffer.getvalue()

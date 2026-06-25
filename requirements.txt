@@ -3,4 +3,4 @@ pandas>=2.2
 plotly>=5.22
 reportlab>=4.2
 kaleido>=0.2.1
-
+openpyxl>=3.1
