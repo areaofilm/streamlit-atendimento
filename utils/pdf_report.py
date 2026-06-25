@@ -47,7 +47,7 @@ def _footer(canvas, _doc) -> None:
 
 def _figure_image(figure: Figure) -> Image | Paragraph:
     try:
-        image_bytes = figure.to_image(format="png", width=1200, height=620, scale=2)
+        image_bytes = figure.to_image(format="png", width=980, height=500, scale=1)
         image = Image(BytesIO(image_bytes), width=25 * cm, height=12.9 * cm)
         return image
     except Exception as exc:  # noqa: BLE001 - PDF should still be generated without image export.

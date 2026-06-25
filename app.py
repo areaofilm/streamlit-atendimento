@@ -203,21 +203,25 @@ def _render_analysis(results: dict) -> None:
     if st.button("Gerar PDF", type="primary"):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = REPORT_DIR / f"relatorio_atendimento_{timestamp}.pdf"
-        pdf_bytes = generate_pdf(
-            output_path=output_path,
-            months=months,
-            comparison_df=formatted_comparison,
-            status_df=formatted_status,
-            type_df=formatted_type,
-            classification_df=formatted_classification,
-            fee_df=formatted_fee,
-            figures=figures,
-            conclusion=conclusion,
-        )
-        st.session_state["pdf_bytes"] = pdf_bytes
-        st.session_state["pdf_name"] = output_path.name
-        st.session_state["pdf_path"] = str(output_path)
-        st.success(f"PDF gerado e salvo localmente em: {output_path}")
+        try:
+            with st.spinner("Gerando PDF. Aguarde alguns segundos enquanto os graficos sao renderizados..."):
+                pdf_bytes = generate_pdf(
+                    output_path=output_path,
+                    months=months,
+                    comparison_df=formatted_comparison,
+                    status_df=formatted_status,
+                    type_df=formatted_type,
+                    classification_df=formatted_classification,
+                    fee_df=formatted_fee,
+                    figures=figures,
+                    conclusion=conclusion,
+                )
+            st.session_state["pdf_bytes"] = pdf_bytes
+            st.session_state["pdf_name"] = output_path.name
+            st.session_state["pdf_path"] = str(output_path)
+            st.success(f"PDF gerado e salvo localmente em: {output_path}")
+        except Exception as exc:  # noqa: BLE001 - keep the UI actionable.
+            st.error(f"Nao foi possivel gerar o PDF: {exc}")
 
     if st.session_state.get("pdf_bytes"):
         st.download_button(
