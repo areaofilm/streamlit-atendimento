@@ -31,8 +31,17 @@ from utils.analise_atendimento import (
     format_metric_dataframe,
     textual_columns_warning,
 )
+from utils.analise_cobranca_ia import (
+    analyze_charge_ai,
+    detect_charge_ai_columns,
+    format_charge_summary,
+    format_metric_table,
+    format_tag_table,
+)
 from utils.graficos import create_figures
+from utils.graficos_cobranca_ia import create_charge_ai_figures
 from utils.leitura_csv import CsvReadError, read_csv_flexible, readable_column_options
+from utils.pdf_cobranca_ia import generate_charge_ai_pdf
 from utils.pdf_report import generate_pdf
 from utils.tratamento_tempo import format_seconds
 
@@ -162,6 +171,129 @@ def _filtered_base_dataframe(analyses) -> pd.DataFrame:
         exported.insert(0, "Mes analisado", analysis.month)
         base_rows.append(exported)
     return pd.concat(base_rows, ignore_index=True) if base_rows else pd.DataFrame()
+
+
+def _build_charge_ai_excel_bytes(results: dict) -> bytes:
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        results["summary_df"].to_excel(writer, sheet_name="Resumo", index=False)
+        results["status_df"].to_excel(writer, sheet_name="Status", index=False)
+        results["type_df"].to_excel(writer, sheet_name="Tipo", index=False)
+        results["classification_df"].to_excel(writer, sheet_name="Classificacao", index=False)
+        results["ia_df"].to_excel(writer, sheet_name="IA Velma", index=False)
+        results["charge_df"].to_excel(writer, sheet_name="Cobranca", index=False)
+        results["recurrence_df"].to_excel(writer, sheet_name="Recorrencia", index=False)
+        results["daily_df"].to_excel(writer, sheet_name="Por Dia", index=False)
+    return output.getvalue()
+
+
+def _render_charge_ai_analysis(results: dict) -> None:
+    analysis = results["analysis"]
+    formatted_summary = results["formatted_summary"]
+    formatted_status = results["formatted_status"]
+    formatted_type = results["formatted_type"]
+    formatted_classification = results["formatted_classification"]
+    formatted_ia = results["formatted_ia"]
+    formatted_charge = results["formatted_charge"]
+    formatted_recurrence = results["formatted_recurrence"]
+    formatted_daily = results["formatted_daily"]
+    figures = results["figures"]
+    conclusion = results["conclusion"]
+
+    st.markdown('<div class="section-title"></div>', unsafe_allow_html=True)
+    st.subheader("Analise de Cobranca com IA")
+    for warning in analysis.warnings:
+        st.warning(warning)
+
+    summary = analysis.summary_row
+    metric_items = [
+        ("Total de atendimentos", summary["Total de atendimentos"]),
+        ("TMA geral", format_seconds(summary["TMA geral"])),
+        ("Mediana TMA", format_seconds(summary["Mediana TMA"])),
+        ("TME geral", format_seconds(summary["TME geral"])),
+        ("Inatividade", summary["Finalizados por inatividade"]),
+        ("% inatividade", f"{summary['% Inatividade']:.1f}%"),
+        ("Transferidos", summary["Transferidos"]),
+        ("% transferencia", f"{summary['% Transferencia']:.1f}%"),
+        ("Finalizados reais", summary["Finalizados reais"]),
+        ("% finalizacao real", f"{summary['% Finalizacao real']:.1f}%"),
+        ("IA transferiu para agente", summary["IA transferiu para agente"]),
+        ("Finalizado pela IA", summary["Finalizado pela IA"]),
+        ("Erro API", summary["Erro API"]),
+    ]
+    for start in range(0, len(metric_items), 4):
+        cols = st.columns(4)
+        for col, (label, value) in zip(cols, metric_items[start : start + 4]):
+            col.metric(label, value)
+
+    st.subheader("Tabelas")
+    tab_summary, tab_ia, tab_charge, tab_ops, tab_daily, tab_downloads = st.tabs(
+        ["Resumo", "IA Velma", "Cobranca", "Operacao", "Por dia", "Downloads"]
+    )
+    with tab_summary:
+        st.dataframe(formatted_summary, use_container_width=True, hide_index=True)
+        st.info(conclusion)
+    with tab_ia:
+        st.dataframe(formatted_ia, use_container_width=True, hide_index=True)
+    with tab_charge:
+        st.dataframe(formatted_charge, use_container_width=True, hide_index=True)
+        st.caption("Recorrencia")
+        st.dataframe(formatted_recurrence, use_container_width=True, hide_index=True)
+    with tab_ops:
+        st.caption("Status dos atendimentos")
+        st.dataframe(formatted_status, use_container_width=True, hide_index=True)
+        st.caption("Tipo de atendimento")
+        st.dataframe(formatted_type, use_container_width=True, hide_index=True)
+        st.caption("Classificacao")
+        st.dataframe(formatted_classification, use_container_width=True, hide_index=True)
+    with tab_daily:
+        st.dataframe(formatted_daily, use_container_width=True, hide_index=True)
+    with tab_downloads:
+        st.download_button(
+            "Baixar Excel da analise",
+            data=_build_charge_ai_excel_bytes(results),
+            file_name="analise_cobranca_ia.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+    st.subheader("Graficos")
+    for _title, figure in figures:
+        st.plotly_chart(figure, use_container_width=True)
+
+    st.subheader("Relatorio em PDF")
+    if st.button("Gerar PDF", type="primary", key="charge_ai_pdf"):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = REPORT_DIR / f"relatorio_cobranca_ia_{timestamp}.pdf"
+        try:
+            with st.spinner("Gerando PDF da analise de cobranca com IA..."):
+                pdf_bytes = generate_charge_ai_pdf(
+                    output_path=output_path,
+                    period=analysis.period,
+                    summary_df=formatted_summary,
+                    ia_df=formatted_ia,
+                    charge_df=formatted_charge,
+                    status_df=formatted_status,
+                    type_df=formatted_type,
+                    recurrence_df=formatted_recurrence,
+                    classification_df=formatted_classification,
+                    daily_df=formatted_daily,
+                    figures=figures,
+                    conclusion=conclusion,
+                )
+            st.session_state["charge_ai_pdf_bytes"] = pdf_bytes
+            st.session_state["charge_ai_pdf_name"] = output_path.name
+            st.success(f"PDF gerado e salvo localmente em: {output_path}")
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Nao foi possivel gerar o PDF: {exc}")
+
+    if st.session_state.get("charge_ai_pdf_bytes"):
+        st.download_button(
+            "Baixar PDF",
+            data=st.session_state["charge_ai_pdf_bytes"],
+            file_name=st.session_state.get("charge_ai_pdf_name", "relatorio_cobranca_ia.pdf"),
+            mime="application/pdf",
+            key="charge_ai_pdf_download",
+        )
 
 
 def _column_controls(df: pd.DataFrame, detected: dict, key_prefix: str) -> dict:
@@ -393,12 +525,13 @@ st.caption("Mudanca de Endereco + Mudanca de Comodo | TMA, TME, status, classifi
 st.sidebar.header("Regras da analise")
 filter_label = st.sidebar.radio(
     "Recorte analisado",
-    ["Mudanca de Endereco + Mudanca de Comodo", "Arquivo inteiro", "Busca personalizada"],
+    ["Mudanca de Endereco + Mudanca de Comodo", "Arquivo inteiro", "Busca personalizada", "Cobranca com IA"],
 )
 filter_mode = {
     "Mudanca de Endereco + Mudanca de Comodo": FILTER_CHANGE,
     "Arquivo inteiro": FILTER_ALL,
     "Busca personalizada": FILTER_CUSTOM,
+    "Cobranca com IA": "charge_ai",
 }[filter_label]
 custom_filter_text = st.sidebar.text_area(
     "Termos da busca personalizada",
@@ -421,13 +554,19 @@ without_fee_terms = _parse_terms(without_fee_text)
 
 left, right = st.columns(2)
 with left:
-    st.subheader("Mes 1")
-    month_1 = st.text_input("Nome do mes 1", value="Maio")
-    upload_1 = st.file_uploader("CSV do mes 1", type=["csv"], key="upload_1")
+    st.subheader("Arquivo principal" if filter_mode == "charge_ai" else "Mes 1")
+    month_1 = st.text_input("Nome da analise" if filter_mode == "charge_ai" else "Nome do mes 1", value="Cobranca IA" if filter_mode == "charge_ai" else "Maio")
+    upload_1 = st.file_uploader("CSV da cobranca com IA" if filter_mode == "charge_ai" else "CSV do mes 1", type=["csv"], key="upload_1")
 with right:
-    st.subheader("Mes 2")
-    month_2 = st.text_input("Nome do mes 2", value="Junho")
-    upload_2 = st.file_uploader("CSV do mes 2", type=["csv"], key="upload_2")
+    if filter_mode == "charge_ai":
+        st.subheader("Modo Cobranca com IA")
+        st.info("Este modo usa o CSV completo enviado no arquivo principal. O segundo arquivo nao e necessario.")
+        month_2 = "Comparativo"
+        upload_2 = None
+    else:
+        st.subheader("Mes 2")
+        month_2 = st.text_input("Nome do mes 2", value="Junho")
+        upload_2 = st.file_uploader("CSV do mes 2", type=["csv"], key="upload_2")
 
 result_1, error_1 = _safe_read(upload_1)
 result_2, error_2 = _safe_read(upload_2)
@@ -454,79 +593,151 @@ if result_1 and result_2:
     col_map_1, col_map_2 = st.columns(2)
     with col_map_1:
         st.markdown(f"**{month_1}**")
-        controls_1 = _column_controls(result_1.dataframe, detect_columns(result_1.dataframe), "m1")
+        detector_1 = detect_charge_ai_columns if filter_mode == "charge_ai" else detect_columns
+        controls_1 = _column_controls(result_1.dataframe, detector_1(result_1.dataframe), "m1")
     with col_map_2:
         st.markdown(f"**{month_2}**")
-        controls_2 = _column_controls(result_2.dataframe, detect_columns(result_2.dataframe), "m2")
+        detector_2 = detect_charge_ai_columns if filter_mode == "charge_ai" else detect_columns
+        controls_2 = _column_controls(result_2.dataframe, detector_2(result_2.dataframe), "m2")
+elif filter_mode == "charge_ai" and result_1:
+    st.subheader("Mapeamento de colunas")
+    controls_1 = _column_controls(result_1.dataframe, detect_charge_ai_columns(result_1.dataframe), "m1")
 
 analyze_clicked = st.button("Analisar", type="primary", use_container_width=True)
 
 if analyze_clicked:
     st.session_state.pop("pdf_bytes", None)
-    if not upload_1 or not upload_2:
-        st.warning("Envie os dois arquivos CSV para iniciar a analise.")
-    elif not result_1 or not result_2:
-        st.error("Corrija os erros de leitura dos arquivos antes de analisar.")
-    elif not controls_1 or not controls_2:
-        st.error("Confira o mapeamento das colunas antes de analisar.")
-    elif not controls_1["attendance_time_col"] or not controls_2["attendance_time_col"]:
-        st.error("Selecione a coluna de tempo de atendimento (TMA) para os dois meses.")
-    else:
-        try:
-            if filter_mode == FILTER_CUSTOM and not filter_terms:
-                st.error("Informe pelo menos um termo para usar a busca personalizada.")
+    st.session_state.pop("charge_ai_pdf_bytes", None)
+    try:
+        if filter_mode == "charge_ai":
+            if not upload_1:
+                st.warning("Envie pelo menos o CSV do Mes 1 para iniciar a analise de Cobranca com IA.")
                 st.stop()
-            analysis_1 = analyze_month(
+            if not result_1:
+                st.error("Corrija os erros de leitura do arquivo antes de analisar.")
+                st.stop()
+            if not controls_1:
+                st.error("Confira o mapeamento das colunas antes de analisar.")
+                st.stop()
+            if not controls_1["attendance_time_col"]:
+                st.error("Selecione a coluna de tempo de atendimento (TMA).")
+                st.stop()
+
+            charge_detected = detect_charge_ai_columns(result_1.dataframe)
+            analysis = analyze_charge_ai(
                 result_1.dataframe,
                 month_1,
-                **controls_1,
-                filter_mode=filter_mode,
-                filter_terms=filter_terms,
-                with_fee_terms=with_fee_terms,
-                without_fee_terms=without_fee_terms,
+                attendance_time_col=controls_1["attendance_time_col"],
+                wait_time_col=controls_1["wait_time_col"],
+                status_col=controls_1["status_col"],
+                text_columns=controls_1["text_columns"],
+                type_col=controls_1["type_col"],
+                classification_col=controls_1["classification_col"],
+                recurrence_col=charge_detected.get("recurrence"),
+                date_col=controls_1["date_col"],
             )
-            analysis_2 = analyze_month(
-                result_2.dataframe,
-                month_2,
-                **controls_2,
-                filter_mode=filter_mode,
-                filter_terms=filter_terms,
-                with_fee_terms=with_fee_terms,
-                without_fee_terms=without_fee_terms,
-            )
-            analyses = [analysis_1, analysis_2]
-            comparison_df = build_comparison_dataframe(analyses)
-            period_df = build_period_dataframe(analyses)
-            fee_df = build_fee_dataframe(analyses)
-            status_df = build_status_dataframe(analyses)
-            type_df = build_type_dataframe(analyses)
-            classification_df = build_classification_dataframe(analyses)
-            bottleneck_df = build_bottleneck_dataframe(classification_df)
-            executive_df = build_executive_summary(analyses, status_df, classification_df)
-            figures = create_figures(comparison_df, status_df, type_df, classification_df, fee_df)
-            st.session_state["analysis_results"] = {
-                "analyses": analyses,
-                "executive_df": executive_df,
-                "bottleneck_df": bottleneck_df,
-                "comparison_df": comparison_df,
-                "period_df": period_df,
-                "fee_df": fee_df,
+            summary_df = pd.DataFrame([analysis.summary_row])
+            status_df = pd.DataFrame(analysis.status_rows)
+            type_df = pd.DataFrame(analysis.type_rows)
+            classification_df = pd.DataFrame(analysis.classification_rows)
+            ia_df = pd.DataFrame(analysis.ia_rows)
+            charge_df = pd.DataFrame(analysis.charge_rows)
+            recurrence_df = pd.DataFrame(analysis.recurrence_rows)
+            daily_df = pd.DataFrame(analysis.daily_rows)
+            figures = create_charge_ai_figures(status_df, type_df, ia_df, charge_df, classification_df, daily_df)
+            st.session_state["charge_ai_results"] = {
+                "analysis": analysis,
+                "summary_df": summary_df,
                 "status_df": status_df,
                 "type_df": type_df,
                 "classification_df": classification_df,
-                "formatted_comparison": format_comparison_dataframe(comparison_df),
-                "formatted_period": period_df,
-                "formatted_fee": format_fee_dataframe(fee_df),
-                "formatted_status": format_metric_dataframe(status_df),
-                "formatted_type": format_metric_dataframe(type_df),
-                "formatted_classification": format_metric_dataframe(classification_df),
-                "formatted_bottleneck": format_bottleneck_dataframe(bottleneck_df),
+                "ia_df": ia_df,
+                "charge_df": charge_df,
+                "recurrence_df": recurrence_df,
+                "daily_df": daily_df,
+                "formatted_summary": format_charge_summary(summary_df),
+                "formatted_status": format_metric_table(status_df),
+                "formatted_type": format_metric_table(type_df),
+                "formatted_classification": format_metric_table(classification_df),
+                "formatted_ia": format_tag_table(ia_df),
+                "formatted_charge": format_tag_table(charge_df),
+                "formatted_recurrence": format_tag_table(recurrence_df),
+                "formatted_daily": format_metric_table(daily_df),
                 "figures": figures,
-                "conclusion": automatic_conclusion(analyses, status_df, classification_df),
-                "months": (month_1, month_2),
+                "conclusion": analysis.conclusion,
             }
-        except Exception as exc:  # noqa: BLE001 - keep UI friendly.
-            st.error(f"Nao foi possivel concluir a analise: {exc}")
+            st.session_state.pop("analysis_results", None)
+            st.stop()
 
-if st.session_state.get("analysis_results"):
+        if not upload_1 or not upload_2:
+            st.warning("Envie os dois arquivos CSV para iniciar a analise.")
+            st.stop()
+        if not result_1 or not result_2:
+            st.error("Corrija os erros de leitura dos arquivos antes de analisar.")
+            st.stop()
+        if not controls_1 or not controls_2:
+            st.error("Confira o mapeamento das colunas antes de analisar.")
+            st.stop()
+        if not controls_1["attendance_time_col"] or not controls_2["attendance_time_col"]:
+            st.error("Selecione a coluna de tempo de atendimento (TMA) para os dois meses.")
+            st.stop()
+
+        if filter_mode == FILTER_CUSTOM and not filter_terms:
+            st.error("Informe pelo menos um termo para usar a busca personalizada.")
+            st.stop()
+        analysis_1 = analyze_month(
+            result_1.dataframe,
+            month_1,
+            **controls_1,
+            filter_mode=filter_mode,
+            filter_terms=filter_terms,
+            with_fee_terms=with_fee_terms,
+            without_fee_terms=without_fee_terms,
+        )
+        analysis_2 = analyze_month(
+            result_2.dataframe,
+            month_2,
+            **controls_2,
+            filter_mode=filter_mode,
+            filter_terms=filter_terms,
+            with_fee_terms=with_fee_terms,
+            without_fee_terms=without_fee_terms,
+        )
+        analyses = [analysis_1, analysis_2]
+        comparison_df = build_comparison_dataframe(analyses)
+        period_df = build_period_dataframe(analyses)
+        fee_df = build_fee_dataframe(analyses)
+        status_df = build_status_dataframe(analyses)
+        type_df = build_type_dataframe(analyses)
+        classification_df = build_classification_dataframe(analyses)
+        bottleneck_df = build_bottleneck_dataframe(classification_df)
+        executive_df = build_executive_summary(analyses, status_df, classification_df)
+        figures = create_figures(comparison_df, status_df, type_df, classification_df, fee_df)
+        st.session_state["analysis_results"] = {
+            "analyses": analyses,
+            "executive_df": executive_df,
+            "bottleneck_df": bottleneck_df,
+            "comparison_df": comparison_df,
+            "period_df": period_df,
+            "fee_df": fee_df,
+            "status_df": status_df,
+            "type_df": type_df,
+            "classification_df": classification_df,
+            "formatted_comparison": format_comparison_dataframe(comparison_df),
+            "formatted_period": period_df,
+            "formatted_fee": format_fee_dataframe(fee_df),
+            "formatted_status": format_metric_dataframe(status_df),
+            "formatted_type": format_metric_dataframe(type_df),
+            "formatted_classification": format_metric_dataframe(classification_df),
+            "formatted_bottleneck": format_bottleneck_dataframe(bottleneck_df),
+            "figures": figures,
+            "conclusion": automatic_conclusion(analyses, status_df, classification_df),
+            "months": (month_1, month_2),
+        }
+    except Exception as exc:  # noqa: BLE001 - keep UI friendly.
+        st.error(f"Nao foi possivel concluir a analise: {exc}")
+
+if filter_mode != "charge_ai" and st.session_state.get("analysis_results"):
     _render_analysis(st.session_state["analysis_results"])
+if filter_mode == "charge_ai" and st.session_state.get("charge_ai_results"):
+    _render_charge_ai_analysis(st.session_state["charge_ai_results"])

@@ -14,6 +14,7 @@ Aplicativo web em Python com Streamlit para comparar dois relatorios CSV de aten
 - Emite alerta quando um dos meses tem menos de 30 atendimentos no recorte.
 - Exibe diagnostico executivo, semaforos de saude, top gargalos e conclusao automatica.
 - Permite alterar o recorte: mudanca endereco/comodo, arquivo inteiro ou busca personalizada.
+- Possui modo independente `Cobranca com IA`, usando o CSV completo para analisar Velma, cobranca, recorrencia, status, tipo, classificacao e evolucao diaria.
 - Permite adicionar termos extras para identificar com taxa e sem taxa.
 - Permite baixar PDF, Excel da analise e CSV com a base filtrada.
 - Exibe cards, tabelas comparativas, graficos e conclusao automatica antes de gerar o PDF.

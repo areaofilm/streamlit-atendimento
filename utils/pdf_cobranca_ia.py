@@ -1,0 +1,131 @@
+from __future__ import annotations
+
+from datetime import datetime
+from io import BytesIO
+from pathlib import Path
+
+import pandas as pd
+from plotly.graph_objects import Figure
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import cm
+from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+
+def _table(df: pd.DataFrame, font_size: int = 7) -> Table:
+    if df.empty and len(df.columns) == 0:
+        df = pd.DataFrame([{"Aviso": "Sem dados disponiveis para esta secao."}])
+    data = [list(df.columns)] + df.astype(str).values.tolist()
+    table = Table(data, repeatRows=1)
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E79")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), font_size),
+                ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D9E2F3")),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F6F8FB")]),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ]
+        )
+    )
+    return table
+
+
+def _figure_image(figure: Figure) -> Image | Paragraph:
+    try:
+        image_bytes = figure.to_image(format="png", width=980, height=500, scale=1)
+        return Image(BytesIO(image_bytes), width=25 * cm, height=12.9 * cm)
+    except Exception as exc:  # noqa: BLE001
+        return Paragraph(f"Nao foi possivel renderizar este grafico no PDF: {exc}", getSampleStyleSheet()["BodyText"])
+
+
+def _footer(canvas, _doc) -> None:
+    canvas.saveState()
+    canvas.setFont("Helvetica", 8)
+    canvas.setFillColor(colors.HexColor("#667085"))
+    canvas.drawString(1.2 * cm, 0.8 * cm, f"Gerado em {datetime.now():%d/%m/%Y %H:%M}")
+    canvas.drawRightString(28.5 * cm, 0.8 * cm, f"Pagina {canvas.getPageNumber()}")
+    canvas.restoreState()
+
+
+def generate_charge_ai_pdf(
+    output_path: str | Path,
+    period: str,
+    summary_df: pd.DataFrame,
+    ia_df: pd.DataFrame,
+    charge_df: pd.DataFrame,
+    status_df: pd.DataFrame,
+    type_df: pd.DataFrame,
+    recurrence_df: pd.DataFrame,
+    classification_df: pd.DataFrame,
+    daily_df: pd.DataFrame,
+    figures: list[tuple[str, Figure]],
+    conclusion: str,
+) -> bytes:
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(A4),
+        rightMargin=1.1 * cm,
+        leftMargin=1.1 * cm,
+        topMargin=1.2 * cm,
+        bottomMargin=1.3 * cm,
+        title="Analise de Cobranca com IA",
+    )
+    styles = getSampleStyleSheet()
+    title = ParagraphStyle("TitleCenter", parent=styles["Title"], alignment=TA_CENTER, fontSize=22, leading=28, textColor=colors.HexColor("#12355B"))
+    subtitle = ParagraphStyle("SubtitleCenter", parent=styles["Heading2"], alignment=TA_CENTER, fontSize=13, textColor=colors.HexColor("#344054"))
+
+    story = [
+        Spacer(1, 2.2 * cm),
+        Paragraph("Analise de Cobranca com IA", title),
+        Spacer(1, 0.25 * cm),
+        Paragraph(f"Periodo analisado: {period}", subtitle),
+        PageBreak(),
+        Paragraph("Resumo geral", styles["Heading2"]),
+        _table(summary_df, font_size=6),
+        Spacer(1, 0.5 * cm),
+        Paragraph("Conclusao automatica", styles["Heading2"]),
+        Paragraph(conclusion, styles["BodyText"]),
+        PageBreak(),
+        Paragraph("Analise da IA Velma", styles["Heading2"]),
+        _table(ia_df, font_size=7),
+        Spacer(1, 0.5 * cm),
+        Paragraph("Analise de cobranca", styles["Heading2"]),
+        _table(charge_df, font_size=7),
+        PageBreak(),
+        Paragraph("Status", styles["Heading2"]),
+        _table(status_df, font_size=7),
+        Spacer(1, 0.5 * cm),
+        Paragraph("Tipo de atendimento", styles["Heading2"]),
+        _table(type_df, font_size=7),
+        Spacer(1, 0.5 * cm),
+        Paragraph("Recorrencia", styles["Heading2"]),
+        _table(recurrence_df, font_size=7),
+        PageBreak(),
+        Paragraph("Classificacao", styles["Heading2"]),
+        _table(classification_df, font_size=6),
+        Spacer(1, 0.5 * cm),
+        Paragraph("Analise por dia", styles["Heading2"]),
+        _table(daily_df, font_size=6),
+        PageBreak(),
+    ]
+
+    for index, (title_text, figure) in enumerate(figures, start=1):
+        story.append(Paragraph(title_text, styles["Heading2"]))
+        story.append(_figure_image(figure))
+        if index % 2 == 0 and index != len(figures):
+            story.append(PageBreak())
+        else:
+            story.append(Spacer(1, 0.4 * cm))
+
+    doc.build(story, onFirstPage=_footer, onLaterPages=_footer)
+    pdf_bytes = buffer.getvalue()
+    output_path.write_bytes(pdf_bytes)
+    return pdf_bytes
