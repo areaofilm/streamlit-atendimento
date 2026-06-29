@@ -34,6 +34,7 @@ from utils.analise_atendimento import (
 )
 from utils.analise_autosservico import (
     analyze_auto_service,
+    detect_auto_service_columns,
     format_auto_service_table,
     format_money,
     format_number,
@@ -890,16 +891,16 @@ def _render_os_pro_audit() -> None:
     with left:
         st.subheader("Entrada")
         uploaded_file = st.file_uploader("Upload PDF/TXT", type=["pdf", "txt"], key="os_pro_upload")
-        pasted_text = st.text_area("Ou cole o atendimento aqui", height=260, key="os_pro_text")
+        pasted_text = st.text_area("Cole o atendimento aqui", height=260, key="os_pro_text")
         side_text = st.text_area("Campo lateral / observacoes do atendimento", height=150, key="os_pro_side_text")
 
-        with st.expander("Cadastro de criterios OS PRO", expanded=False):
+        with st.expander("Cadastre de criterios OS PRO", expanded=False):
             criteria_files = st.file_uploader(
                 "PDF/TXT de criterios OS PRO (prioritario)",
                 type=["pdf", "txt"],
                 key="os_pro_criteria_file",
                 accept_multiple_files=True,
-                help="Envie de 1 a 10 arquivos. Se enviado, este conjunto sera usado antes do JSON abaixo.",
+                help="Envie de 1 a 10 arquivos em PDF ou TXT. Se enviado, este conjunto sera usado antes do JSON abaixo.",
             )
             criteria_json = st.text_area(
                 "Criterios em JSON",
@@ -990,9 +991,32 @@ def _auto_service_excel_bytes(results) -> bytes:
     return output.getvalue()
 
 
-def _auto_service_summary_pdf_df(summary: dict) -> pd.DataFrame:
+def _auto_service_month_label(value) -> str:
+    if pd.isna(value):
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    text = str(value).strip()
+    if text.endswith(".0") and text[:-2].isdigit():
+        return text[:-2]
+    return text
+
+
+def _auto_service_month_options(df: pd.DataFrame, month_col: str | None) -> list[str]:
+    if not month_col or month_col not in df.columns:
+        return []
+    labels = [_auto_service_month_label(value) for value in df[month_col].dropna()]
+    labels = sorted(
+        {label for label in labels if label},
+        key=lambda label: (0, int(label)) if label.isdigit() else (1, label),
+    )
+    return labels
+
+
+def _auto_service_summary_pdf_df(summary: dict, period_label: str = "Arquivo inteiro") -> pd.DataFrame:
     return pd.DataFrame(
         [
+            {"Indicador": "Periodo analisado", "Resultado": period_label},
             {"Indicador": "Total de registros analisados", "Resultado": f"{format_number(summary['Registros'])} linhas"},
             {"Indicador": "Total de atendimentos/acionamentos", "Resultado": format_number(summary["Atendimentos"])},
             {"Indicador": "OS geradas", "Resultado": format_number(summary["OS geradas"])},
@@ -1039,6 +1063,28 @@ def _render_auto_service_analysis() -> None:
         type=["csv", "xlsx", "xls"],
         key="upload_autosservico",
     )
+    uploaded_df = None
+    month_col = None
+    selected_months: list[str] = []
+    if uploaded_file is not None:
+        try:
+            uploaded_df = read_auto_service_file(uploaded_file)
+            detected_columns = detect_auto_service_columns(uploaded_df)
+            month_col = detected_columns.get("mes")
+            month_options = _auto_service_month_options(uploaded_df, month_col)
+            if month_options:
+                selected_months = st.multiselect(
+                    "Meses para analisar",
+                    options=month_options,
+                    default=month_options,
+                    help="Selecione um unico mes para analisar mes a mes, ou mantenha varios meses para uma visao consolidada.",
+                )
+                st.caption(f"Coluna de mes detectada: {month_col}")
+            else:
+                st.warning("Nao encontrei uma coluna de mes. A analise sera feita com o arquivo inteiro.")
+        except Exception as exc:  # noqa: BLE001 - keep the UI actionable.
+            st.error(f"Nao foi possivel ler o arquivo para montar o filtro de mes: {exc}")
+            uploaded_df = None
     analyze_clicked = st.button("Analisar", type="primary", use_container_width=True)
 
     if analyze_clicked:
@@ -1049,11 +1095,21 @@ def _render_auto_service_analysis() -> None:
             st.stop()
         try:
             with st.spinner("Lendo arquivo e montando a analise de autosservico..."):
-                df = read_auto_service_file(uploaded_file)
+                df = uploaded_df if uploaded_df is not None else read_auto_service_file(uploaded_file)
                 if df.empty:
                     st.warning("O arquivo enviado esta vazio.")
                     st.stop()
+                if month_col and selected_months:
+                    month_labels = df[month_col].apply(_auto_service_month_label)
+                    df = df[month_labels.isin(selected_months)].copy()
+                    if df.empty:
+                        st.warning("Nenhuma linha encontrada para os meses selecionados.")
+                        st.stop()
+                elif month_col and not selected_months:
+                    st.warning("Selecione pelo menos um mes para analisar.")
+                    st.stop()
                 st.session_state["auto_service_results"] = analyze_auto_service(df)
+                st.session_state["auto_service_month_filter"] = ", ".join(selected_months) if selected_months else "Arquivo inteiro"
         except Exception as exc:  # noqa: BLE001 - keep the UI actionable.
             st.error(f"Nao foi possivel analisar o arquivo: {exc}")
             st.stop()
@@ -1065,6 +1121,7 @@ def _render_auto_service_analysis() -> None:
 
     summary = results.summary
     st.subheader("Resumo geral")
+    st.caption(f"Periodo analisado: {st.session_state.get('auto_service_month_filter', 'Arquivo inteiro')}")
     metrics = [
         ("Registros", format_number(summary["Registros"])),
         ("Atendimentos", format_number(summary["Atendimentos"])),
@@ -1183,7 +1240,7 @@ def _render_auto_service_analysis() -> None:
             with st.spinner("Gerando PDF completo com logo Valenet..."):
                 pdf_bytes = generate_auto_service_pdf(
                     output_path=output_path,
-                    summary_df=_auto_service_summary_pdf_df(summary),
+                    summary_df=_auto_service_summary_pdf_df(summary, st.session_state.get("auto_service_month_filter", "Arquivo inteiro")),
                     service_df=format_auto_service_table(results.service_df),
                     type_df=format_auto_service_table(results.type_df),
                     channel_df=format_auto_service_table(results.channel_df),
