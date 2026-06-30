@@ -362,6 +362,14 @@ def format_charge_summary(df: pd.DataFrame) -> pd.DataFrame:
     for column in ("% Finalizacao real", "% Inatividade", "% Transferencia"):
         if column in formatted.columns:
             formatted[column] = formatted[column].map(lambda value: f"{float(value):.1f}%")
+    formatted = formatted.rename(
+        columns={
+            "Finalizados reais": "Finalizado",
+            "% Finalizacao real": "% Finalizado",
+            "Finalizados por inatividade": "Finalizado por inatividade",
+            "Finalizado pela IA": "Finalizado pela IA (tag)",
+        }
+    )
     return formatted
 
 

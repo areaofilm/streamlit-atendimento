@@ -209,7 +209,7 @@ def _filtered_base_dataframe(analyses) -> pd.DataFrame:
 def _build_charge_ai_excel_bytes(results: dict) -> bytes:
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        results["summary_df"].to_excel(writer, sheet_name="Resumo", index=False)
+        results["formatted_summary"].to_excel(writer, sheet_name="Resumo", index=False)
         results["status_df"].to_excel(writer, sheet_name="Status", index=False)
         results["type_df"].to_excel(writer, sheet_name="Tipo", index=False)
         results["classification_df"].to_excel(writer, sheet_name="Classificacao", index=False)
@@ -466,14 +466,14 @@ def _render_charge_ai_analysis(results: dict) -> None:
         ("TMA geral", format_seconds(summary["TMA geral"])),
         ("Mediana TMA", format_seconds(summary["Mediana TMA"])),
         ("TME geral", format_seconds(summary["TME geral"])),
-        ("Inatividade", summary["Finalizados por inatividade"]),
+        ("Finalizado por inatividade", summary["Finalizados por inatividade"]),
         ("% inatividade", f"{summary['% Inatividade']:.1f}%"),
         ("Transferidos", summary["Transferidos"]),
         ("% transferencia", f"{summary['% Transferencia']:.1f}%"),
-        ("Finalizados reais", summary["Finalizados reais"]),
-        ("% finalizacao real", f"{summary['% Finalizacao real']:.1f}%"),
+        ("Finalizado", summary["Finalizados reais"]),
+        ("% finalizado", f"{summary['% Finalizacao real']:.1f}%"),
         ("IA transferiu para agente", summary["IA transferiu para agente"]),
-        ("Finalizado pela IA", summary["Finalizado pela IA"]),
+        ("Finalizado pela IA (tag)", summary["Finalizado pela IA"]),
         ("Erro API", summary["Erro API"]),
     ]
     for start in range(0, len(metric_items), 4):
@@ -487,6 +487,11 @@ def _render_charge_ai_analysis(results: dict) -> None:
     )
     with tab_summary:
         st.dataframe(formatted_summary, use_container_width=True, hide_index=True)
+        st.caption(
+            "Finalizado vem da coluna Status quando o valor e exatamente 'Finalizado'. "
+            "Finalizado por inatividade tambem vem da coluna Status. "
+            "Finalizado pela IA vem da tag 'Velma - Finalizado pela IA'."
+        )
         st.info(conclusion)
     with tab_ia:
         st.dataframe(formatted_ia, use_container_width=True, hide_index=True)
