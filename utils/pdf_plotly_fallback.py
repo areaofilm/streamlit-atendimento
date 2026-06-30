@@ -72,7 +72,7 @@ def plotly_bar_fallback(figure: Figure, title: str | None = None) -> Flowable:
     chart.x = 1.0 * cm
     chart.y = 1.8 * cm
     chart.width = 22.8 * cm
-    chart.height = 9.0 * cm
+    chart.height = 8.4 * cm
     chart.data = series
     chart.categoryAxis.categoryNames = [label[:22] for label in categories]
     chart.categoryAxis.labels.boxAnchor = "ne"
@@ -82,7 +82,7 @@ def plotly_bar_fallback(figure: Figure, title: str | None = None) -> Flowable:
     chart.categoryAxis.labels.fontSize = 6
     chart.valueAxis.valueMin = 0
     max_value = max((max(values) for values in series if values), default=0)
-    chart.valueAxis.valueMax = max(1, max_value * 1.2)
+    chart.valueAxis.valueMax = max(1, max_value * 1.35)
     chart.valueAxis.labels.fontSize = 7
     chart.bars.strokeColor = colors.white
     for index, color in enumerate(PALETTE):
@@ -101,15 +101,15 @@ def plotly_bar_fallback(figure: Figure, title: str | None = None) -> Flowable:
             if value <= 0:
                 continue
             x = chart.x + category_index * group_width + group_padding + series_index * bar_width + (bar_width / 2)
-            y = chart.y + (value / value_max) * chart.height + 0.12 * cm
+            y = chart.y + (value / value_max) * chart.height + 0.06 * cm
             drawing.add(
                 String(
                     x,
-                    min(y, chart.y + chart.height + 0.25 * cm),
+                    min(y, chart.y + chart.height + 0.15 * cm),
                     _format_value(value),
                     textAnchor="middle",
                     fontName="Helvetica-Bold",
-                    fontSize=7,
+                    fontSize=9,
                     fillColor=colors.HexColor("#111827"),
                 )
             )
