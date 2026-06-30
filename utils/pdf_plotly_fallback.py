@@ -35,6 +35,14 @@ def _labels(values: Any) -> list[str]:
     return [str(value) for value in list(values)]
 
 
+def _format_value(value: float) -> str:
+    if abs(value) >= 1000:
+        return f"{value:,.0f}".replace(",", ".")
+    if float(value).is_integer():
+        return str(int(value))
+    return f"{value:.1f}".replace(".", ",")
+
+
 def plotly_bar_fallback(figure: Figure, title: str | None = None) -> Flowable:
     """Render a simple Plotly bar figure with ReportLab, avoiding Kaleido/Chrome."""
 
@@ -82,6 +90,30 @@ def plotly_bar_fallback(figure: Figure, title: str | None = None) -> Flowable:
             chart.bars[index].fillColor = color
     drawing.add(chart)
 
+    category_count = max(len(categories), 1)
+    series_count = max(len(series), 1)
+    group_width = chart.width / category_count
+    bar_width = group_width * 0.72 / series_count
+    group_padding = group_width * 0.14
+    value_max = chart.valueAxis.valueMax or 1
+    for series_index, values in enumerate(series):
+        for category_index, value in enumerate(values):
+            if value <= 0:
+                continue
+            x = chart.x + category_index * group_width + group_padding + series_index * bar_width + (bar_width / 2)
+            y = chart.y + (value / value_max) * chart.height + 0.12 * cm
+            drawing.add(
+                String(
+                    x,
+                    min(y, chart.y + chart.height + 0.25 * cm),
+                    _format_value(value),
+                    textAnchor="middle",
+                    fontName="Helvetica-Bold",
+                    fontSize=7,
+                    fillColor=colors.HexColor("#111827"),
+                )
+            )
+
     if len(series) > 1:
         legend = Legend()
         legend.x = 1.0 * cm
@@ -91,4 +123,3 @@ def plotly_bar_fallback(figure: Figure, title: str | None = None) -> Flowable:
         drawing.add(legend)
 
     return drawing
-
