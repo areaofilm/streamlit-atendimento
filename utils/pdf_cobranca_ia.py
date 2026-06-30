@@ -13,6 +13,8 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from .pdf_plotly_fallback import plotly_bar_fallback
+
 
 LOGO_PATH = Path(__file__).resolve().parents[1] / "assets" / "valenet_logo.png"
 
@@ -38,12 +40,8 @@ def _table(df: pd.DataFrame, font_size: int = 7) -> Table:
     return table
 
 
-def _figure_image(figure: Figure) -> Image | Paragraph:
-    try:
-        image_bytes = figure.to_image(format="png", width=980, height=500, scale=1)
-        return Image(BytesIO(image_bytes), width=25 * cm, height=12.9 * cm)
-    except Exception as exc:  # noqa: BLE001
-        return Paragraph(f"Nao foi possivel renderizar este grafico no PDF: {exc}", getSampleStyleSheet()["BodyText"])
+def _figure_image(figure: Figure, title: str = "") -> Image | Paragraph:
+    return plotly_bar_fallback(figure, title)
 
 
 def _footer(canvas, _doc) -> None:
@@ -123,7 +121,7 @@ def generate_charge_ai_pdf(
 
     for index, (title_text, figure) in enumerate(figures, start=1):
         story.append(Paragraph(title_text, styles["Heading2"]))
-        story.append(_figure_image(figure))
+        story.append(_figure_image(figure, title_text))
         if index % 2 == 0 and index != len(figures):
             story.append(PageBreak())
         else:
