@@ -40,6 +40,33 @@ def _table(df: pd.DataFrame, font_size: int = 7) -> Table:
     return table
 
 
+def _summary_table(df: pd.DataFrame) -> Table:
+    if df.empty:
+        return _table(pd.DataFrame([{"Aviso": "Sem dados disponiveis para esta secao."}]), font_size=8)
+    row = df.iloc[0].to_dict()
+    data = [["Indicador", "Valor"]] + [[str(key), str(value)] for key, value in row.items()]
+    table = Table(data, repeatRows=1, colWidths=[8.5 * cm, 7.5 * cm])
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E79")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D9E2F3")),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F6F8FB")]),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    return table
+
+
 def _figure_image(figure: Figure, title: str = "") -> Image | Paragraph:
     return plotly_bar_fallback(figure, title)
 
@@ -91,7 +118,7 @@ def generate_charge_ai_pdf(
         Paragraph(f"Periodo analisado: {period}", subtitle),
         PageBreak(),
         Paragraph("Resumo geral", styles["Heading2"]),
-        _table(summary_df, font_size=6),
+        _summary_table(summary_df),
         Spacer(1, 0.5 * cm),
         Paragraph("Conclusao automatica", styles["Heading2"]),
         Paragraph(conclusion, styles["BodyText"]),
