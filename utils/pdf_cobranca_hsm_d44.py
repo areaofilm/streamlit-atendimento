@@ -15,8 +15,9 @@ from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
-from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table
 
+from .pdf_table_utils import readable_table, vertical_indicator_table
 from .tratamento_tempo import duration_to_seconds, format_seconds
 
 
@@ -24,27 +25,13 @@ LOGO_PATH = Path(__file__).resolve().parents[1] / "assets" / "valenet_logo.png"
 
 
 def _table(df: pd.DataFrame, font_size: int = 7, max_rows: int | None = None) -> Table:
-    if df.empty and len(df.columns) == 0:
-        df = pd.DataFrame([{"Aviso": "Sem dados disponiveis para esta secao."}])
-    shown = df.head(max_rows) if max_rows else df
-    data = [list(shown.columns)] + shown.astype(str).values.tolist()
-    table = Table(data, repeatRows=1)
-    table.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E79")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTSIZE", (0, 0), (-1, -1), font_size),
-                ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D9E2F3")),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F6F8FB")]),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 3),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 3),
-            ]
-        )
-    )
-    return table
+    return readable_table(df, font_size=font_size, max_rows=max_rows)
+
+
+def _summary_table(df: pd.DataFrame) -> Table:
+    if len(df) == 1:
+        return vertical_indicator_table(df, font_size=8.5)
+    return readable_table(df, font_size=8)
 
 
 def _footer(canvas, _doc) -> None:
@@ -154,12 +141,12 @@ def generate_d44_pdf(
         Paragraph(f"Periodo analisado: {period}", subtitle),
         PageBreak(),
         Paragraph("Resumo executivo", styles["Heading2"]),
-        _table(summary_df, font_size=5),
+        _summary_table(summary_df),
         Spacer(1, 0.4 * cm),
     ]
 
     if not comparison_df.empty and len(comparison_df) > 1:
-        story.extend([Paragraph("Comparacao principal", styles["Heading2"]), _table(comparison_df, font_size=5), Spacer(1, 0.4 * cm)])
+        story.extend([Paragraph("Comparacao principal", styles["Heading2"]), _table(comparison_df, font_size=8), Spacer(1, 0.4 * cm)])
 
     story.extend(
         [
@@ -167,28 +154,28 @@ def generate_d44_pdf(
             Paragraph(conclusion, styles["BodyText"]),
             PageBreak(),
             Paragraph("Status dos atendimentos", styles["Heading2"]),
-            _table(status_df, font_size=6, max_rows=25),
+            _table(status_df, font_size=8, max_rows=25),
             Spacer(1, 0.4 * cm),
             Paragraph("Tipo de atendimento", styles["Heading2"]),
-            _table(type_df, font_size=6, max_rows=20),
+            _table(type_df, font_size=8, max_rows=20),
             PageBreak(),
             Paragraph("Classificacao", styles["Heading2"]),
-            _table(classification_df, font_size=5, max_rows=25),
+            _table(classification_df, font_size=8, max_rows=25),
             PageBreak(),
             Paragraph("HSM - Opcao selecionada", styles["Heading2"]),
-            _table(hsm_df, font_size=6),
+            _table(hsm_df, font_size=8),
             Spacer(1, 0.4 * cm),
             Paragraph("Resultado das propostas", styles["Heading2"]),
-            _table(proposal_df, font_size=5),
+            _table(proposal_df, font_size=8),
             PageBreak(),
             Paragraph("Proposta x negociacao", styles["Heading2"]),
-            _table(proposal_cross_df, font_size=6),
+            _table(proposal_cross_df, font_size=8),
             Spacer(1, 0.4 * cm),
             Paragraph("Tags de cobranca", styles["Heading2"]),
-            _table(charge_df, font_size=5, max_rows=25),
+            _table(charge_df, font_size=8, max_rows=25),
             PageBreak(),
             Paragraph("Analise por dia", styles["Heading2"]),
-            _table(daily_df, font_size=5, max_rows=30),
+            _table(daily_df, font_size=8, max_rows=30),
             PageBreak(),
         ]
     )

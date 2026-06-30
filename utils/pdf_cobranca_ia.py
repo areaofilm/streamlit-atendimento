@@ -11,8 +11,9 @@ from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
-from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table
 
+from .pdf_table_utils import readable_table, vertical_indicator_table
 from .pdf_plotly_fallback import plotly_bar_fallback
 
 
@@ -20,51 +21,11 @@ LOGO_PATH = Path(__file__).resolve().parents[1] / "assets" / "valenet_logo.png"
 
 
 def _table(df: pd.DataFrame, font_size: int = 7) -> Table:
-    if df.empty and len(df.columns) == 0:
-        df = pd.DataFrame([{"Aviso": "Sem dados disponiveis para esta secao."}])
-    data = [list(df.columns)] + df.astype(str).values.tolist()
-    table = Table(data, repeatRows=1)
-    table.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E79")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTSIZE", (0, 0), (-1, -1), font_size),
-                ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D9E2F3")),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F6F8FB")]),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ]
-        )
-    )
-    return table
+    return readable_table(df, font_size=font_size)
 
 
 def _summary_table(df: pd.DataFrame) -> Table:
-    if df.empty:
-        return _table(pd.DataFrame([{"Aviso": "Sem dados disponiveis para esta secao."}]), font_size=8)
-    row = df.iloc[0].to_dict()
-    data = [["Indicador", "Valor"]] + [[str(key), str(value)] for key, value in row.items()]
-    table = Table(data, repeatRows=1, colWidths=[8.5 * cm, 7.5 * cm])
-    table.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E79")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"),
-                ("FONTSIZE", (0, 0), (-1, -1), 8),
-                ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D9E2F3")),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F6F8FB")]),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 5),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-                ("TOPPADDING", (0, 0), (-1, -1), 4),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-            ]
-        )
-    )
-    return table
+    return vertical_indicator_table(df, font_size=8.5)
 
 
 def _figure_image(figure: Figure, title: str = "") -> Image | Paragraph:
@@ -124,25 +85,25 @@ def generate_charge_ai_pdf(
         Paragraph(conclusion, styles["BodyText"]),
         PageBreak(),
         Paragraph("Analise da IA Velma", styles["Heading2"]),
-        _table(ia_df, font_size=7),
+        _table(ia_df, font_size=8),
         Spacer(1, 0.5 * cm),
         Paragraph("Analise de cobranca", styles["Heading2"]),
-        _table(charge_df, font_size=7),
+        _table(charge_df, font_size=8),
         PageBreak(),
         Paragraph("Status", styles["Heading2"]),
-        _table(status_df, font_size=7),
+        _table(status_df, font_size=8),
         Spacer(1, 0.5 * cm),
         Paragraph("Tipo de atendimento", styles["Heading2"]),
-        _table(type_df, font_size=7),
+        _table(type_df, font_size=8),
         Spacer(1, 0.5 * cm),
         Paragraph("Recorrencia", styles["Heading2"]),
-        _table(recurrence_df, font_size=7),
+        _table(recurrence_df, font_size=8),
         PageBreak(),
         Paragraph("Classificacao", styles["Heading2"]),
-        _table(classification_df, font_size=6),
+        _table(classification_df, font_size=8),
         Spacer(1, 0.5 * cm),
         Paragraph("Analise por dia", styles["Heading2"]),
-        _table(daily_df, font_size=6),
+        _table(daily_df, font_size=8),
         PageBreak(),
     ]
 

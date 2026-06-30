@@ -11,36 +11,23 @@ from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
-from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table
+
+from .pdf_table_utils import readable_table
 
 
 LOGO_PATH = Path(__file__).resolve().parents[1] / "assets" / "valenet_logo.png"
 
 
 def _table(df: pd.DataFrame, font_size: int = 7, max_rows: int | None = None, col_widths: list[float] | None = None) -> Table:
-    if df.empty and len(df.columns) == 0:
-        df = pd.DataFrame([{"Aviso": "Sem dados disponiveis para esta secao."}])
-    shown = df.head(max_rows) if max_rows else df
-    data = [list(shown.columns)] + shown.astype(str).values.tolist()
-    table = Table(data, repeatRows=1, colWidths=col_widths)
-    table.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E79")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTSIZE", (0, 0), (-1, -1), font_size),
-                ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D9E2F3")),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F6F8FB")]),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 3),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 3),
-                ("TOPPADDING", (0, 0), (-1, -1), 5),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ]
-        )
+    first_column = str(df.columns[0]).lower() if len(df.columns) else ""
+    return readable_table(
+        df,
+        font_size=font_size,
+        max_rows=max_rows,
+        col_widths=col_widths,
+        bold_first_column=first_column in {"indicador", "item"},
     )
-    return table
 
 
 def _compact_metric_table(df: pd.DataFrame, label_col: str) -> pd.DataFrame:
@@ -158,7 +145,7 @@ def generate_auto_service_pdf(
             Paragraph("OS, faturas, CSAT, canais e departamentos", subtitle),
             PageBreak(),
             Paragraph("Resumo geral", styles["Heading2"]),
-            _table(summary_df, font_size=8),
+            _table(summary_df, font_size=8.5),
             Spacer(1, 0.5 * cm),
             Paragraph("Diagnostico principal", styles["Heading2"]),
             *_paragraph_list(diagnostic, body),
@@ -171,16 +158,16 @@ def generate_auto_service_pdf(
             ),
             Spacer(1, 0.35 * cm),
             Paragraph("Mudanca de endereco x mudanca de comodo", styles["Heading2"]),
-            _table(_compact_metric_table(service_df, "Servico"), font_size=7.0, max_rows=25, col_widths=[4.9 * cm, 1.8 * cm, 1.5 * cm, 1.8 * cm, 1.8 * cm, 1.8 * cm, 2.5 * cm, 2.0 * cm, 1.7 * cm, 1.7 * cm]),
+            _table(_compact_metric_table(service_df, "Servico"), font_size=8, max_rows=25, col_widths=[4.9 * cm, 1.8 * cm, 1.5 * cm, 1.8 * cm, 1.8 * cm, 1.8 * cm, 2.5 * cm, 2.0 * cm, 1.7 * cm, 1.7 * cm]),
             Spacer(1, 0.5 * cm),
             Paragraph("Autosservico x atendimento humano", styles["Heading2"]),
-            _table(_compact_metric_table(type_df, "Tipo"), font_size=7.0, max_rows=25, col_widths=[4.9 * cm, 1.8 * cm, 1.5 * cm, 1.8 * cm, 1.8 * cm, 1.8 * cm, 2.5 * cm, 2.0 * cm, 1.7 * cm, 1.7 * cm]),
+            _table(_compact_metric_table(type_df, "Tipo"), font_size=8, max_rows=25, col_widths=[4.9 * cm, 1.8 * cm, 1.5 * cm, 1.8 * cm, 1.8 * cm, 1.8 * cm, 2.5 * cm, 2.0 * cm, 1.7 * cm, 1.7 * cm]),
             PageBreak(),
             Paragraph("App Minha Valenet x WhatsApp", styles["Heading2"]),
-            _table(_compact_metric_table(channel_df, "Canal"), font_size=7.0, max_rows=25, col_widths=[4.9 * cm, 1.8 * cm, 1.5 * cm, 1.8 * cm, 1.8 * cm, 1.8 * cm, 2.5 * cm, 2.0 * cm, 1.7 * cm, 1.7 * cm]),
+            _table(_compact_metric_table(channel_df, "Canal"), font_size=8, max_rows=25, col_widths=[4.9 * cm, 1.8 * cm, 1.5 * cm, 1.8 * cm, 1.8 * cm, 1.8 * cm, 2.5 * cm, 2.0 * cm, 1.7 * cm, 1.7 * cm]),
             Spacer(1, 0.5 * cm),
             Paragraph("Analise por departamento/equipe", styles["Heading2"]),
-            _table(_compact_metric_table(department_df, "Departamento"), font_size=6.8, max_rows=30, col_widths=[4.9 * cm, 1.8 * cm, 1.5 * cm, 1.8 * cm, 1.8 * cm, 1.8 * cm, 2.5 * cm, 2.0 * cm, 1.7 * cm, 1.7 * cm]),
+            _table(_compact_metric_table(department_df, "Departamento"), font_size=8, max_rows=30, col_widths=[4.9 * cm, 1.8 * cm, 1.5 * cm, 1.8 * cm, 1.8 * cm, 1.8 * cm, 2.5 * cm, 2.0 * cm, 1.7 * cm, 1.7 * cm]),
             PageBreak(),
             Paragraph("Principais gargalos", styles["Heading2"]),
             *_paragraph_list(bottlenecks, body),
